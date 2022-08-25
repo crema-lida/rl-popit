@@ -31,7 +31,7 @@ class Env:
 
     def reset(self):
         self.win_rate = self.wins / self.total_games
-        info = f'Round {int(self.round)} | Win Rate: {self.win_rate * 100:.2f} %'
+        info = f'Win Rate: {self.win_rate * 100:.2f} %'
         self.state.fill(0)
         self.round = 0
         self.pieces.fill(0)
@@ -52,7 +52,7 @@ class Env:
             rewards = np.where(pieces[:, 0] > 0, 1, -1)
             self.total_games += self.batch_size
             self.wins += 0.5 * (rewards.sum() + self.batch_size)
-        info = f'Agent: {pieces[0][0]}, Opponent: {pieces[0][1]} | '
+        info = f'{pieces[0][0]} : {pieces[0][1]} | '
         self.pieces = pieces
 
         if self.graphics: self.render()

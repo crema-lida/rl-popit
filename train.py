@@ -3,8 +3,8 @@ if __name__ == '__main__':
     import torch
     import torch.nn.functional as f
     import os
-
     from time import time
+
     from game import Env
     from network import Network
     from utils import SIZE, choice
@@ -19,6 +19,7 @@ if __name__ == '__main__':
     opponent = Network(features).to(device)
     net = [agent, opponent]
     if os.path.exists(MODEL_NAME):
+        print(MODEL_NAME, 'loaded.')
         model_state = torch.load(MODEL_NAME)
         agent.load_state_dict(model_state)
     opponent.load_state_dict(agent.state_dict())
@@ -66,11 +67,13 @@ if __name__ == '__main__':
                 out = agent(state)
                 policy = agent.forward_policy_head(out, mask)
                 sum(-torch.log(policy[np.arange(action.size), action]) * rewards[~done]).backward()
-            # state_value = agent.forward_value_head(out.detach())
-            # value_loss = f.mse_loss(state_value, rewards.unsqueeze(1))
-            # value_loss.backward()
+                # state_value = agent.forward_value_head(out.detach())
+                # value_loss = f.mse_loss(state_value, rewards[~done].unsqueeze(1))
+                # value_loss.backward()
             policy_optim.step()
             policy_optim.zero_grad()
+            # value_optim.step()
+            # value_optim.zero_grad()
             state, done_info = env.reset()
             for arr in history.values():
                 arr.clear()
@@ -80,7 +83,7 @@ if __name__ == '__main__':
                   f'| elapsed: {time() - start:.2f} s')
             epoch += 1
 
-            if env.total_games % 20 == 0:
+            if epoch % 20 == 0:
                 if env.win_rate > 0.70:
                     model_state = agent.state_dict()
                     torch.save(model_state, MODEL_NAME)
