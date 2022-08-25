@@ -27,18 +27,15 @@ def update(state, player, pos):
         for pos in neighbors:
             state[player][pos] += state[1 - player][pos]
             state[1 - player][pos] = 0
-            if state[1 - player].sum() == 0: return state
+            if state[1 - player].sum() == 0: return
             update(state, player, pos)
-
-    return state
 
 
 @njit(parallel=True)
 def update_batch(state, player, action):
     for i in prange(len(action)):
         if action[i] == -1: continue
-        state[i] = update(state[i], player, (action[i] // 6, action[i] % 6))
-    return state
+        update(state[i], player, (action[i] // 6, action[i] % 6))
 
 
 def allocate_spots(num):

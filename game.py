@@ -41,7 +41,7 @@ class Env:
     def step(self, player: int, action: np.ndarray):
         _action = np.full(self.batch_size, -1)
         _action[~self.done] = action
-        self.state = update_batch(self.state.copy(), player, _action)
+        update_batch(self.state, player, _action)
 
         pieces = self.state[:, :2].sum(axis=(2, 3))
         rewards = 0
