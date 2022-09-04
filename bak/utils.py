@@ -37,11 +37,11 @@ def update(state, pos):
             update(state, pos)
 
 
-@njit(parallel=True)
+@njit
 def update_batch(state, action):
     for i in prange(len(state)):
-        if action[i] == -1: continue
         update(state[i], (action[i] // 6, action[i] % 6))
+    return state
 
 
 def allocate_spots(num):

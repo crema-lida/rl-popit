@@ -6,7 +6,7 @@ import torch.nn.functional as f
 class Network(nn.Module):
     def __init__(self):
         super().__init__()
-        features = 32
+        features = 64
         self.conv_block = nn.Sequential(
             nn.Conv2d(4, features, 3, padding=1),
             nn.BatchNorm2d(features),
@@ -21,7 +21,7 @@ class Network(nn.Module):
                     nn.Conv2d(features, features, 3, padding=1),
                     nn.BatchNorm2d(features),
                 )
-            ] * 4
+            ] * 5
         )
         self.policy_head = nn.Sequential(
             nn.Conv2d(features, 2, 1),
