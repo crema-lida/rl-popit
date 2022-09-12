@@ -60,5 +60,5 @@ class Network(nn.Module):
 if __name__ == '__main__':
     import torch.onnx as onnx
 
-    x = torch.zeros(128, 4, 6, 6, dtype=torch.float)
+    x = torch.zeros(128, 5, 6, 6, dtype=torch.float)
     onnx.export(Network(), x, './model.onnx')
