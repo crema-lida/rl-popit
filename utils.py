@@ -2,7 +2,6 @@ import numpy as np
 import torch
 from numba import njit, prange
 
-
 SIZE = np.full((6, 6), 3, dtype=int)
 SIZE[::5, :] = 2
 SIZE[:, ::5] = 2
@@ -15,7 +14,16 @@ def from_numpy(arr, device=torch.device('cpu')):
 
 @njit
 def choice(p):
-    return np.searchsorted(np.cumsum(p), np.random.rand(1))  # select one integer from range(len(p)) according to p
+    """select one integer from range(len(p)) according to p"""
+    return np.searchsorted(np.cumsum(p), np.random.rand(1)).clip(None, 35)
+
+
+def augment_data(arr):
+    flipud, fliplr = np.flip(arr, 2), np.flip(arr, 3)
+    rot_180 = np.flip(arr, (2, 3))
+    rot_90l = np.transpose(arr[..., ::-1], (0, 1, 3, 2))
+    rot_90r = np.flip(rot_90l, (2, 3))
+    return np.concatenate((arr, flipud, fliplr, rot_180, rot_90l, rot_90r))
 
 
 @njit
