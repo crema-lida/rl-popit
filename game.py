@@ -12,7 +12,7 @@ class Env:
         self.graphics = graphics
         self.fps = fps
         self.batch_size = batch_size
-        self.state = np.zeros((self.batch_size, 5, 6, 6), dtype=int)
+        self.state = np.zeros((self.batch_size, 4, 6, 6), dtype=int)
         self.colormap = None
 
         if self.graphics:
@@ -21,10 +21,11 @@ class Env:
             pg.init()
             pg.display.init()
             pg.display.set_caption('Pop it!')
-            window_size = (1440, 1440)
-            self.window = pg.display.set_mode(window_size)
+            screen_size = np.array([1440, 1440])
+            self.window = pg.display.set_mode(screen_size / 1.75)
+            self.screen = pg.Surface(screen_size, pg.SRCALPHA)
 
-            self.grid = pg.Surface(window_size, pg.SRCALPHA)
+            self.grid = pg.Surface(screen_size, pg.SRCALPHA)
             pg.draw.line(self.grid, GRAY, (0, 722), (1440, 722), width=5)
             pg.draw.line(self.grid, GRAY, (720, 0), (720, 1440), width=5)
             for i in range(13):
@@ -58,20 +59,21 @@ class Env:
         if not self.graphics: return
         import pygame as pg
 
-        self.window.fill(WHITE)
+        self.screen.fill(WHITE)
 
         for n, state in enumerate(state):
             canvas, rect = self.canvas[n], self.rect[n]
-            self.window.blit(canvas, rect)
+            self.screen.blit(canvas, rect)
             for player in (0, 1):
                 for i, row in enumerate(state[player]):
                     for j, num in enumerate(row):
                         cx, cy = j * 120 + 60 + rect.x, i * 120 + 60 + rect.y
                         spots = allocate_spots(num)
                         for d in spots:
-                            pg.draw.circle(self.window, COLOR[player], (cx + d[0], cy + d[1]), 14)
+                            pg.draw.circle(self.screen, COLOR[player], (cx + d[0], cy + d[1]), 14)
 
-        self.window.blit(self.grid, (0, 0))
+        self.screen.blit(self.grid, (0, 0))
+        self.window.blit(pg.transform.scale(self.screen, self.window.get_rect().size), (0, 0))
         pg.event.pump()
         pg.display.update()
         if self.fps: self.clock.tick(self.fps)

@@ -23,9 +23,8 @@ def train_with_policy_network(epochs=10000):
 
             while np.any(~done):
                 state[:, [0, 1]] = state[:, [1, 0]]
-                state[:, 2] = np.where(state[:, 1] == 0, 1, 0)  # available positions to make a move
-                state[:, 3] = np.where(state[:, 0] == SIZE, 1, 0)  # positions full of agent's pieces
-                state[:, 4] = np.where(state[:, 1] == SIZE, 1, 0)  # positions full of opponent's pieces
+                state[:, 2] = np.where(state[:, 0] == SIZE, 1, 0)  # positions full of agent's pieces
+                state[:, 3] = np.where(state[:, 1] == SIZE, 1, 0)  # positions full of opponent's pieces
 
                 state = from_numpy(state[~done], device)  # (n, 4, 6, 6)
                 mask = state[:, 1].reshape(-1, 36) != 0
@@ -41,11 +40,15 @@ def train_with_policy_network(epochs=10000):
                     history['a'].append(action[~done])
                     history['done'].append(done)
 
+                    p = np.zeros((4, 36))
+                    sel = ~done[:4]
+                    len_sel = len(np.where(sel)[0])
+                    p[sel] = policy[:len_sel] / policy[:len_sel].max(axis=1, keepdims=True)
+                    env.paint_canvas(p)
+
                 state, done, rewards = env.step(env.state, action)
 
                 if player == 0:
-                    p = policy[:4] / policy[:4].max(axis=1, keepdims=True)
-                    env.paint_canvas(p)
                     env.render(env.state[:4])
                 else:
                     env.render(env.state[:4, [1, 0]])
@@ -67,7 +70,7 @@ def train_with_policy_network(epochs=10000):
                 torch.sum(
                     -torch.log(policy[action]) * rewards[~done].repeat(6)
                 ).backward()
-                # for param in agent.conv_block.parameters():
+                # for param in agent.policy_head.parameters():
                 #     print(param.grad)
                 # state_value = agent.forward_value_head(out.detach())
                 # value_loss = f.mse_loss(state_value, rewards[~done].unsqueeze(1))
@@ -82,7 +85,7 @@ def train_with_policy_network(epochs=10000):
         print(f'Epoch {ep} | Win Rate: {win_rate * 100:.2f} % | '
               f'elapsed: {time() - start:.2f} s')
 
-        if win_rate > 0.65:
+        if win_rate > 0.80:
             model_state = agent.state_dict()
             torch.save(model_state, MODEL_PATH)
             net[1].load_state_dict(model_state)
@@ -101,9 +104,8 @@ def train_with_mcts(epochs=10000):
 
             while np.any(~done):
                 state[:, [0, 1]] = state[:, [1, 0]]
-                state[:, 2] = np.where(state[:, 1] == 0, 1, 0)
-                state[:, 3] = np.where(state[:, 0] == SIZE, 1, 0)  # positions full of agent's pieces
-                state[:, 4] = np.where(state[:, 1] == SIZE, 1, 0)  # positions full of opponent's pieces
+                state[:, 2] = np.where(state[:, 0] == SIZE, 1, 0)  # positions full of agent's pieces
+                state[:, 3] = np.where(state[:, 1] == SIZE, 1, 0)  # positions full of opponent's pieces
 
                 if player == 0:
                     idx = np.arange(len(state[~done]))
@@ -116,18 +118,28 @@ def train_with_mcts(epochs=10000):
                     action_value = np.zeros_like(policy)  # (n, 36)
                     n = np.zeros_like(policy)  # (n, 36)
                     action = np.full(env.batch_size, -1)  # (N,)
+                    print(state[:4])
 
-                    for i in range(500):
-                        q = action_value.clip(min=0) / (1e-5 + n)  # (n, 36)
-                        score = q + 0.01 * policy / (n + 1)  # (n, 36)
+                    for i in range(20):
+                        q = action_value / (1e-5 + n)  # (n, 36)
+                        score = q + 0.1 * policy / (n + 1)  # (n, 36)
                         selection = np.argmax(score, axis=1)
                         action[~done] = selection
                         action_value[idx, selection] += rollout(state.copy(), action)[~done]
                         n[idx, selection] += 1
 
-                        p = score[:4] / np.sum(score[:4], axis=1, keepdims=True)
-                        env.paint_canvas(p / p.max(axis=1, keepdims=True))
-                        env.render_text(policy[:4], q[:4], n[:4])
+                        cmap, p_value, q_value, n_value = [np.zeros((4, 36)) for _ in range(4)]
+                        sel = ~done[:4]
+                        len_sel = len(np.where(sel)[0])
+                        exp_cmap = np.exp(score[:len_sel])
+                        _cmap = exp_cmap / np.sum(exp_cmap, axis=1, keepdims=True)
+                        cmap[sel] = _cmap / np.max(_cmap, axis=1, keepdims=True)
+                        env.paint_canvas(cmap)
+
+                        p_value[sel] = policy[:len_sel]
+                        q_value[sel] = q[:len_sel]
+                        n_value[sel] = n[:len_sel]
+                        env.render_text(p_value, q_value, n_value)
                         env.render(env.state[:4])
 
                     n = from_numpy(augment_data(n.reshape((-1, 1, 6, 6))).reshape((-1, 36)), device)
@@ -174,9 +186,8 @@ def rollout(state, action):
     player = 1
     while np.any(~done):
         state[:, [0, 1]] = state[:, [1, 0]]
-        state[:, 2] = np.where(state[:, 1] == 0, 1, 0)  # available positions to make a move
-        state[:, 3] = np.where(state[:, 0] == SIZE, 1, 0)  # positions full of agent's pieces
-        state[:, 4] = np.where(state[:, 1] == SIZE, 1, 0)  # positions full of opponent's pieces
+        state[:, 2] = np.where(state[:, 0] == SIZE, 1, 0)  # positions full of agent's pieces
+        state[:, 3] = np.where(state[:, 1] == SIZE, 1, 0)  # positions full of opponent's pieces
 
         _state = from_numpy(state[~done], device)
         mask = _state[:, 1].reshape(-1, 36) != 0
@@ -196,7 +207,7 @@ if __name__ == '__main__':
     MODEL_PATH = 'model_v8'
     # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
-    env = Env(graphics=False, fps=None, batch_size=512)
+    env = Env(graphics=True, fps=None, batch_size=4)
     device = torch.device('cuda')
     agent = Network().to(device)
     opponent = Network().to(device)
@@ -209,11 +220,11 @@ if __name__ == '__main__':
     policy_optim = torch.optim.Adam([{'params': agent.conv_block.parameters()},
                                      {'params': agent.res_net.parameters()},
                                      {'params': agent.policy_head.parameters()}],
-                                    lr=0.01, weight_decay=1e-4)
+                                    lr=0.0001, weight_decay=1e-4)
     value_optim = torch.optim.Adam(agent.value_head.parameters(),
-                                   lr=0.001, weight_decay=1e-4)
+                                   lr=0.01, weight_decay=1e-4)
 
-    train_with_policy_network()
-    # train_with_mcts()
+    # train_with_policy_network()
+    train_with_mcts()
 
     env.close()
