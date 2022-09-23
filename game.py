@@ -22,7 +22,7 @@ class Env:
             pg.display.init()
             pg.display.set_caption('Pop it!')
             screen_size = np.array([1440, 1440])
-            self.window = pg.display.set_mode(screen_size / 1.75)
+            self.window = pg.display.set_mode(screen_size)
             self.screen = pg.Surface(screen_size, pg.SRCALPHA)
 
             self.grid = pg.Surface(screen_size, pg.SRCALPHA)
@@ -94,7 +94,7 @@ class Env:
         for j, (p, q, n) in enumerate(zip(p, q, n)):
             canvas = self.canvas[j]
             for i, (_p, _q, _n) in enumerate(zip(p, q, n)):
-                texts = f'π: {_p: .4f}', f'Q: {_q: .4f}', f'SEL: {_n}'
+                texts = f'π: {_p: .4f}', f'Q: {_q: .4f}', f'SEL: {_n: .0f}'
                 c = (i % 6 * 120 + 60, i // 6 * 120 + 60)
                 position = (c[0], c[1] - 50), (c[0], c[1] - 35), (c[0], c[1] + 50)
                 for text, pos in zip(texts, position):

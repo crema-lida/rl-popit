@@ -81,15 +81,14 @@ def train_with_policy_network(epochs=10000):
         # value_optim.step()
         # value_optim.zero_grad()
 
+        model_state = agent.state_dict()
+        torch.save(model_state, MODEL_PATH)
         win_rate = wins / (2 * env.batch_size)
         print(f'Epoch {ep} | Win Rate: {win_rate * 100:.2f} % | '
               f'elapsed: {time() - start:.2f} s')
-
-        if win_rate > 0.80:
-            model_state = agent.state_dict()
-            torch.save(model_state, MODEL_PATH)
+        if win_rate > 0.70:
             net[1].load_state_dict(model_state)
-            print('New model state saved!')
+            print('New model state is used by opp.')
 
 
 def train_with_mcts(epochs=10000):
@@ -101,8 +100,9 @@ def train_with_mcts(epochs=10000):
         for first_move in range(2):
             player = first_move
             state, done, rewards = env.reset()
-
+            round = 0
             while np.any(~done):
+                round += 1
                 state[:, [0, 1]] = state[:, [1, 0]]
                 state[:, 2] = np.where(state[:, 0] == SIZE, 1, 0)  # positions full of agent's pieces
                 state[:, 3] = np.where(state[:, 1] == SIZE, 1, 0)  # positions full of opponent's pieces
@@ -114,13 +114,13 @@ def train_with_mcts(epochs=10000):
                     out = net[player](_state)
                     _policy = net[player].forward_policy_head(out, mask)  # (n, 36)
                     policy = _policy[idx].detach().cpu().numpy()
+                    policy[mask[idx].cpu().numpy()] = -np.inf
 
                     action_value = np.zeros_like(policy)  # (n, 36)
                     n = np.zeros_like(policy)  # (n, 36)
                     action = np.full(env.batch_size, -1)  # (N,)
-                    print(state[:4])
 
-                    for i in range(20):
+                    for i in range(300):
                         q = action_value / (1e-5 + n)  # (n, 36)
                         score = q + 0.1 * policy / (n + 1)  # (n, 36)
                         selection = np.argmax(score, axis=1)
@@ -177,8 +177,8 @@ def train_with_mcts(epochs=10000):
               f'elapsed: {time() - start:.2f} s')
 
         model_state = agent.state_dict()
-        torch.save(model_state, MODEL_PATH)
-        print('New model state saved!')
+        # torch.save(model_state, MODEL_PATH)
+        # print('New model state saved!')
 
 
 def rollout(state, action):
@@ -207,7 +207,7 @@ if __name__ == '__main__':
     MODEL_PATH = 'model_v8'
     # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
-    env = Env(graphics=True, fps=None, batch_size=4)
+    env = Env(graphics=True, fps=None, batch_size=16)
     device = torch.device('cuda')
     agent = Network().to(device)
     opponent = Network().to(device)
@@ -218,9 +218,9 @@ if __name__ == '__main__':
         agent.load_state_dict(model_state)
     opponent.load_state_dict(agent.state_dict())
     policy_optim = torch.optim.Adam([{'params': agent.conv_block.parameters()},
-                                     {'params': agent.res_net.parameters()},
-                                     {'params': agent.policy_head.parameters()}],
-                                    lr=0.0001, weight_decay=1e-4)
+                                    {'params': agent.res_net.parameters()},
+                                    {'params': agent.policy_head.parameters()}],
+                                    lr=1e-2, weight_decay=1e-4)
     value_optim = torch.optim.Adam(agent.value_head.parameters(),
                                    lr=0.01, weight_decay=1e-4)
 
