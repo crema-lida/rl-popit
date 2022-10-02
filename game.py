@@ -12,8 +12,8 @@ class Env:
         self.graphics = graphics
         self.fps = fps
         self.batch_size = batch_size
-        self.state = np.zeros((self.batch_size, 4, 6, 6), dtype=int)
-        self.colormap = None
+        self.state = np.zeros((self.batch_size, 3, 6, 6), dtype=int)
+        self.turns = 0
 
         if self.graphics:
             import pygame as pg
@@ -44,14 +44,14 @@ class Env:
 
     def reset(self):
         self.state.fill(0)
+        self.turns = 0
         return self.state, np.full(self.batch_size, False), None
 
-    @staticmethod
-    def step(state, action):
+    def step(self, state, action):
         update_batch(state, action)
-
+        self.turns += 1
         pieces = state[:, :2].sum(axis=(2, 3))
-        done = ~pieces.all(axis=1) if pieces[0].sum() > 2 else np.full(len(state), False)
+        done = ~pieces.all(axis=1) if self.turns > 2 else np.full(len(state), False)
         rewards = np.where(pieces[:, 0] > 0, 1, -1) if np.all(done) else None
         return state, done, rewards
 

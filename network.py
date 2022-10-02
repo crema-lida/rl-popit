@@ -6,9 +6,9 @@ import torch.nn.functional as f
 class Network(nn.Module):
     def __init__(self):
         super().__init__()
-        features = 24
+        features = 12
         self.conv_block = nn.Sequential(
-            nn.Conv2d(4, features, 3, padding=1),
+            nn.Conv2d(3, features, 3, padding=1),
             nn.BatchNorm2d(features),
             nn.Softplus()
         )
@@ -60,5 +60,5 @@ class Network(nn.Module):
 if __name__ == '__main__':
     import torch.onnx as onnx
 
-    x = torch.zeros(128, 4, 6, 6, dtype=torch.float)
+    x = torch.zeros(128, 3, 6, 6, dtype=torch.float)
     onnx.export(Network(), x, './model.onnx')

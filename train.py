@@ -23,8 +23,7 @@ def train_with_policy_network(epochs=10000):
 
             while np.any(~done):
                 state[:, [0, 1]] = state[:, [1, 0]]
-                state[:, 2] = np.where(state[:, 0] == SIZE, 1, 0)  # positions full of agent's pieces
-                state[:, 3] = np.where(state[:, 1] == SIZE, 1, 0)  # positions full of opponent's pieces
+                state[:, 2] = np.where(state[:, :2].sum(axis=1) == SIZE, 1, 0)  # positions full of pieces
 
                 state = from_numpy(state[~done], device)  # (n, 4, 6, 6)
                 mask = state[:, 1].reshape(-1, 36) != 0
@@ -100,12 +99,9 @@ def train_with_mcts(epochs=10000):
         for first_move in range(2):
             player = first_move
             state, done, rewards = env.reset()
-            round = 0
             while np.any(~done):
-                round += 1
                 state[:, [0, 1]] = state[:, [1, 0]]
-                state[:, 2] = np.where(state[:, 0] == SIZE, 1, 0)  # positions full of agent's pieces
-                state[:, 3] = np.where(state[:, 1] == SIZE, 1, 0)  # positions full of opponent's pieces
+                state[:, 2] = np.where(state[:, :2].sum(axis=1) == SIZE, 1, 0)  # positions full of pieces
 
                 if player == 0:
                     idx = np.arange(len(state[~done]))
@@ -120,10 +116,15 @@ def train_with_mcts(epochs=10000):
                     n = np.zeros_like(policy)  # (n, 36)
                     action = np.full(env.batch_size, -1)  # (N,)
 
-                    for i in range(300):
+                    turns = env.turns
+
+                    for i in range(180):
                         q = action_value / (1e-5 + n)  # (n, 36)
-                        score = q + 0.1 * policy / (n + 1)  # (n, 36)
-                        selection = np.argmax(score, axis=1)
+                        score = q + policy / (n + 1)  # (n, 36)
+                        if i < 36:
+                            selection = i
+                        else:
+                            selection = np.argmax(score, axis=1)
                         action[~done] = selection
                         action_value[idx, selection] += rollout(state.copy(), action)[~done]
                         n[idx, selection] += 1
@@ -141,6 +142,7 @@ def train_with_mcts(epochs=10000):
                         n_value[sel] = n[:len_sel]
                         env.render_text(p_value, q_value, n_value)
                         env.render(env.state[:4])
+                        env.turns = turns
 
                     n = from_numpy(augment_data(n.reshape((-1, 1, 6, 6))).reshape((-1, 36)), device)
                     target_p = n / torch.sum(n, dim=1, keepdim=True)
@@ -177,8 +179,8 @@ def train_with_mcts(epochs=10000):
               f'elapsed: {time() - start:.2f} s')
 
         model_state = agent.state_dict()
-        # torch.save(model_state, MODEL_PATH)
-        # print('New model state saved!')
+        torch.save(model_state, MODEL_PATH)
+        print('New model state saved!')
 
 
 def rollout(state, action):
@@ -186,8 +188,7 @@ def rollout(state, action):
     player = 1
     while np.any(~done):
         state[:, [0, 1]] = state[:, [1, 0]]
-        state[:, 2] = np.where(state[:, 0] == SIZE, 1, 0)  # positions full of agent's pieces
-        state[:, 3] = np.where(state[:, 1] == SIZE, 1, 0)  # positions full of opponent's pieces
+        state[:, 2] = np.where(state[:, :2].sum(axis=1) == SIZE, 1, 0)  # positions full of pieces
 
         _state = from_numpy(state[~done], device)
         mask = _state[:, 1].reshape(-1, 36) != 0
@@ -207,7 +208,7 @@ if __name__ == '__main__':
     MODEL_PATH = 'model_v8'
     # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
-    env = Env(graphics=True, fps=None, batch_size=16)
+    env = Env(graphics=True, fps=None, batch_size=128)
     device = torch.device('cuda')
     agent = Network().to(device)
     opponent = Network().to(device)
@@ -222,9 +223,9 @@ if __name__ == '__main__':
                                     {'params': agent.policy_head.parameters()}],
                                     lr=1e-2, weight_decay=1e-4)
     value_optim = torch.optim.Adam(agent.value_head.parameters(),
-                                   lr=0.01, weight_decay=1e-4)
+                                   lr=1e-2, weight_decay=1e-4)
 
-    # train_with_policy_network()
-    train_with_mcts()
+    train_with_policy_network()
+    # train_with_mcts()
 
     env.close()
