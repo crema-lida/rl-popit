@@ -6,29 +6,29 @@ import torch.nn.functional as f
 class Network(nn.Module):
     def __init__(self):
         super().__init__()
-        features = 12
+        features = 20
         self.conv_block = nn.Sequential(
-            nn.Conv2d(3, features, 3, padding=1),
+            nn.Conv2d(2, features, 3, padding=1),
             nn.BatchNorm2d(features),
-            nn.Softplus()
+            nn.PReLU(features)
         )
         self.res_net = nn.ModuleList(
             [
                 nn.Sequential(
                     nn.Conv2d(features, features, 3, padding=1),
                     nn.BatchNorm2d(features),
-                    nn.Softplus(),
+                    nn.PReLU(),
                     nn.Conv2d(features, features, 3, padding=1),
                     nn.BatchNorm2d(features),
-                )
-            ] * 4
+                ) for _ in range(5)
+            ]
         )
         self.policy_head = nn.Sequential(
             nn.Conv2d(features, 2, 1),
             nn.BatchNorm2d(2),
             nn.Softplus(),
             nn.Flatten(),
-            nn.Linear(72, 36)
+            nn.Linear(72, 36),
         )
         self.value_head = nn.Sequential(
             nn.Conv2d(features, 1, 1),
@@ -38,7 +38,7 @@ class Network(nn.Module):
             nn.Linear(36, features),
             nn.Softplus(),
             nn.Linear(features, 1),
-            nn.Tanh()
+            nn.Tanh(),
         )
 
     def forward(self, x):
@@ -49,8 +49,7 @@ class Network(nn.Module):
         return x
 
     def forward_policy_head(self, x, mask):
-        policy = self.policy_head(x)
-        policy.masked_fill_(mask, -torch.inf)
+        policy = self.policy_head(x).masked_fill(mask, -torch.inf)
         return f.softmax(policy, dim=1)
 
     def forward_value_head(self, x):
@@ -60,5 +59,5 @@ class Network(nn.Module):
 if __name__ == '__main__':
     import torch.onnx as onnx
 
-    x = torch.zeros(128, 3, 6, 6, dtype=torch.float)
+    x = torch.zeros(128, 2, 6, 6, dtype=torch.float)
     onnx.export(Network(), x, './model.onnx')

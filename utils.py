@@ -18,11 +18,12 @@ def choice(p):
     return np.searchsorted(np.cumsum(p), np.random.rand(1)).clip(None, 35)
 
 
+@njit
 def augment_data(arr):
-    flipud, fliplr = np.flip(arr, 2), np.flip(arr, 3)
-    rot_180 = np.flip(arr, (2, 3))
+    flipud, fliplr = arr[..., ::-1, :], arr[..., ::-1]
+    rot_180 = flipud[..., ::-1]
     rot_90l = np.transpose(arr[..., ::-1], (0, 1, 3, 2))
-    rot_90r = np.flip(rot_90l, (2, 3))
+    rot_90r = np.transpose(arr[..., ::-1, :], (0, 1, 3, 2))
     return np.concatenate((arr, flipud, fliplr, rot_180, rot_90l, rot_90r))
 
 

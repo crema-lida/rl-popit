@@ -12,8 +12,9 @@ class Env:
         self.graphics = graphics
         self.fps = fps
         self.batch_size = batch_size
-        self.state = np.zeros((self.batch_size, 3, 6, 6), dtype=int)
+        self.state = np.zeros((self.batch_size, 2, 6, 6), dtype=int)
         self.turns = 0
+        self.mode = 'train'
 
         if self.graphics:
             import pygame as pg
@@ -43,7 +44,7 @@ class Env:
             self.render(self.state[:4])
 
     def reset(self):
-        self.state.fill(0)
+        self.state = np.zeros((self.batch_size, 2, 6, 6), dtype=int)
         self.turns = 0
         return self.state, np.full(self.batch_size, False), None
 
@@ -73,7 +74,10 @@ class Env:
                             pg.draw.circle(self.screen, COLOR[player], (cx + d[0], cy + d[1]), 14)
 
         self.screen.blit(self.grid, (0, 0))
-        self.window.blit(pg.transform.scale(self.screen, self.window.get_rect().size), (0, 0))
+        size = np.array(self.window.get_rect().size)
+        if self.mode == 'interactive':
+            size *= 2
+        self.window.blit(pg.transform.scale(self.screen, size), (0, 0))
         pg.event.pump()
         pg.display.update()
         if self.fps: self.clock.tick(self.fps)
@@ -102,6 +106,15 @@ class Env:
                     rect = text.get_rect()
                     rect.center = pos
                     canvas.blit(text, rect)
+
+    @staticmethod
+    def wait():
+        import pygame as pg
+        while True:
+            for event in pg.event.get():
+                if event.type == pg.MOUSEBUTTONDOWN:
+                    action = event.pos[1] // 240 * 6 + event.pos[0] // 240
+                    return np.array([action])
 
     def close(self):
         if not self.graphics: return
