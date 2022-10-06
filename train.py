@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import torch.nn.functional as f
 from torch.nn.utils import clip_grad_norm_
-import os
+import os, random
 from time import time
 
 from game import Env
@@ -11,8 +11,17 @@ from utils import SIZE, from_numpy, choice, augment_data
 
 
 def train_with_policy_network(epochs=10000):
+    model_idx = 1
     start = time()
     for ep in range(epochs + 1):
+        if ep % 100 == 0:
+            model_path = f'model/opp_{model_idx}'
+            opp_model[model_path] = agent.state_dict()
+            torch.save(opp_model[model_path], model_path)
+            model_idx = model_idx + 1 if model_idx < 10 else 1
+        model_path = random.sample(list(opp_model.keys()), 1)[0]
+        opponent.load_state_dict(opp_model[model_path])
+
         wins = 0
 
         # Agent makes the first move in the first half batch,
@@ -24,6 +33,8 @@ def train_with_policy_network(epochs=10000):
 
             while np.any(~done):
                 state[:, [0, 1]] = state[:, [1, 0]]
+                state[:, 2] = np.where(state[:, 0] == SIZE, 1, 0)  # positions full of agent's pieces
+                state[:, 3] = np.where(state[:, 1] == SIZE, 1, 0)  # positions full of opponent's pieces
 
                 state = from_numpy(state[~done], device)  # (n, 4, 6, 6)
                 mask = state[:, 1].reshape(-1, 36) != 0
@@ -68,7 +79,7 @@ def train_with_policy_network(epochs=10000):
                 out = agent(state)
                 policy = agent.forward_policy_head(out, mask)
                 torch.sum(
-                    -torch.log(policy[action].clip(1e-4, 0.9999)) * rewards[~done].repeat(6)
+                    -torch.log(policy[action].clip(1e-8)) * rewards[~done].repeat(6)
                 ).backward()
 
                 # state_value = agent.forward_value_head(out.detach())
@@ -76,22 +87,20 @@ def train_with_policy_network(epochs=10000):
                 # value_loss.backward()
                 # value_optim.step()
                 # value_optim.zero_grad()
-        for net in [agent.conv_block, agent.res_net, agent.policy_head]:
+
+        for net in agent.policy_network:
             total_norm = clip_grad_norm_(net.parameters(), max_norm=1.0, error_if_nonfinite=True)
             # print('total norm: ', total_norm.item())
-            # for param in net.parameters():
-            #     print(param.grad.max().item())
+            # for name, param in net.named_parameters():
+            #     print(name, param.grad.max().item())
         policy_optim.step()
         policy_optim.zero_grad()
 
         model_state = agent.state_dict()
-        torch.save(model_state, MODEL_PATH)
+        torch.save(model_state, 'model/agent')
         win_rate = wins / (2 * env.batch_size)
-        print(f'Epoch {ep} | Win Rate: {win_rate * 100:.2f} % | '
+        print(f'Epoch {ep} | {model_path[6:]} | Win Rate: {win_rate * 100:.2f} % | '
               f'elapsed: {time() - start:.2f} s')
-        if win_rate > 0.65:
-            cnn[1].load_state_dict(model_state)
-            print(f'New model state is used by opponent.')
 
 
 def train_with_mcts(epochs=10000):
@@ -278,23 +287,34 @@ def play_with_mcts():
 
 
 if __name__ == '__main__':
-    MODEL_PATH = 'model_v10'
     # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
-    env = Env(graphics=False, fps=None, batch_size=128)
+    env = Env(graphics=False, fps=None, batch_size=512)
     device = torch.device('cuda')
     agent = Network().to(device)
     opponent = Network().to(device)
     cnn = [agent, opponent]
-    if os.path.exists(MODEL_PATH):
-        model_state = torch.load(MODEL_PATH)
-        print(f'Model state loaded from {MODEL_PATH}')
+
+    if os.path.exists('model/agent'):
+        model_state = torch.load('model/agent')
         agent.load_state_dict(model_state)
-    opponent.load_state_dict(agent.state_dict())
-    policy_optim = torch.optim.NAdam([{'params': agent.conv_block.parameters()},
-                                      {'params': agent.res_net.parameters()},
-                                      {'params': agent.policy_head.parameters()}],
-                                     lr=2e-4, weight_decay=1e-4)
+    opp_model = {}
+    for i in range(10):
+        model_path = f'model/opp_{i}'
+        if os.path.exists(model_path):
+            opp_model[model_path] = torch.load(model_path)
+
+    params = {'weight': [], 'bias': []}
+    for net in agent.policy_network:
+        for name, param in net.named_parameters():
+            if 'bias' in name:
+                params['bias'].append(param)
+            else:
+                params['weight'].append(param)
+
+    policy_optim = torch.optim.NAdam([{'params': params['weight'], 'weight_decay': 1e-4},
+                                      {'params': params['bias'], 'weight_decay': 0}],
+                                     lr=2e-3)
     value_optim = torch.optim.Adam(agent.value_head.parameters(),
                                    lr=1e-2, weight_decay=1e-4)
 

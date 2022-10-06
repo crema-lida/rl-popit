@@ -6,9 +6,9 @@ import torch.nn.functional as f
 class Network(nn.Module):
     def __init__(self):
         super().__init__()
-        features = 20
+        features = 10
         self.conv_block = nn.Sequential(
-            nn.Conv2d(2, features, 3, padding=1),
+            nn.Conv2d(4, features, 3, padding=1),
             nn.BatchNorm2d(features),
             nn.PReLU(features)
         )
@@ -17,7 +17,7 @@ class Network(nn.Module):
                 nn.Sequential(
                     nn.Conv2d(features, features, 3, padding=1),
                     nn.BatchNorm2d(features),
-                    nn.PReLU(),
+                    nn.RReLU(),
                     nn.Conv2d(features, features, 3, padding=1),
                     nn.BatchNorm2d(features),
                 ) for _ in range(5)
@@ -26,7 +26,7 @@ class Network(nn.Module):
         self.policy_head = nn.Sequential(
             nn.Conv2d(features, 2, 1),
             nn.BatchNorm2d(2),
-            nn.Softplus(),
+            nn.PReLU(),
             nn.Flatten(),
             nn.Linear(72, 36),
         )
@@ -40,12 +40,13 @@ class Network(nn.Module):
             nn.Linear(features, 1),
             nn.Tanh(),
         )
+        self.policy_network = [self.conv_block, self.res_net, self.policy_head]
 
     def forward(self, x):
         x = self.conv_block(x)
         for block in self.res_net:
             residual = block(x)
-            x = f.softplus(x + residual)
+            x = f.rrelu(x + residual)
         return x
 
     def forward_policy_head(self, x, mask):
@@ -59,5 +60,5 @@ class Network(nn.Module):
 if __name__ == '__main__':
     import torch.onnx as onnx
 
-    x = torch.zeros(128, 2, 6, 6, dtype=torch.float)
+    x = torch.zeros(128, 4, 6, 6, dtype=torch.float)
     onnx.export(Network(), x, './model.onnx')

@@ -12,7 +12,7 @@ class Env:
         self.graphics = graphics
         self.fps = fps
         self.batch_size = batch_size
-        self.state = np.zeros((self.batch_size, 2, 6, 6), dtype=int)
+        self.state = np.zeros((self.batch_size, 4, 6, 6), dtype=int)
         self.turns = 0
         self.mode = 'train'
 
@@ -44,7 +44,7 @@ class Env:
             self.render(self.state[:4])
 
     def reset(self):
-        self.state = np.zeros((self.batch_size, 2, 6, 6), dtype=int)
+        self.state = np.zeros((self.batch_size, 4, 6, 6), dtype=int)
         self.turns = 0
         return self.state, np.full(self.batch_size, False), None
 
