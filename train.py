@@ -289,7 +289,7 @@ def play_with_mcts():
 if __name__ == '__main__':
     # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
-    env = Env(graphics=False, fps=None, batch_size=512)
+    env = Env(graphics=False, fps=None, batch_size=1024)
     device = torch.device('cuda')
     agent = Network().to(device)
     opponent = Network().to(device)
