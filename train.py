@@ -228,6 +228,11 @@ def rollout(state, action):
 
 def play_with_mcts():
     assert env.graphics, 'Interactive mode requires graphics=True.'
+    global device
+    device = torch.device('cpu')
+    for nn in cnn:
+        nn.to(device)
+        nn.to(device)
     env.batch_size = 1
     env.mode = 'interactive'
     player = np.random.randint(2)
@@ -300,7 +305,7 @@ def play_with_mcts():
 if __name__ == '__main__':
     # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
-    env = Env(graphics=False, fps=None, batch_size=128)
+    env = Env(graphics=True, fps=None, batch_size=128)
     device = torch.device('cuda')
     agent = Network().to(device)
     opponent = Network().to(device)
@@ -324,8 +329,8 @@ if __name__ == '__main__':
     value_optim = torch.optim.Adam(agent.value_head.parameters(),
                                    lr=1e-2, weight_decay=1e-4)
 
-    train_with_policy_network()
+    # train_with_policy_network()
     # train_with_mcts()
-    # play_with_mcts()
+    play_with_mcts()
 
     env.close()
