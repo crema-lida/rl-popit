@@ -79,7 +79,7 @@ def train_with_policy_network(epochs=10000):
                 out = agent(state)
                 policy = agent.forward_policy_head(out, mask)
                 torch.sum(
-                    -torch.log(policy[action].clip(1e-8)) * rewards[~done].repeat(6)
+                    -torch.log(policy[action].clip(min=1e-8)) * rewards[~done].repeat(6)
                 ).backward()
 
                 # state_value = agent.forward_value_head(out.detach())
