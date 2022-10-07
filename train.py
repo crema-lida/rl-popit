@@ -11,7 +11,7 @@ from utils import SIZE, from_numpy, choice, augment_data
 
 
 def train_with_policy_network(epochs=10000):
-    model_idx = 12
+    model_idx = 7
     opp_model = {}
     for i in range(1, 21):
         model_path = f'model/opp_{i}'
@@ -36,7 +36,7 @@ def train_with_policy_network(epochs=10000):
 
             model_state = agent.state_dict()
             torch.save(model_state, 'model/agent')
-            print('--------------New model state saved!--------------')
+            print(f'---------New model state saved to {model_path}---------')
 
         model_path = random.sample(list(opp_model.keys()), 1)[0]
         opponent.load_state_dict(opp_model[model_path])
@@ -309,7 +309,7 @@ def play_with_mcts():
 if __name__ == '__main__':
     # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
-    env = Env(graphics=False, fps=None, batch_size=1024)
+    env = Env(graphics=True, fps=3, batch_size=1024)
     device = torch.device('cuda')
     agent = Network().to(device)
     opponent = Network().to(device)
