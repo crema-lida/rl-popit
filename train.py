@@ -11,7 +11,7 @@ from utils import SIZE, from_numpy, choice, augment_data
 
 
 def train_with_policy_network(epochs=10000):
-    model_idx = 1
+    model_idx = 12
     opp_model = {}
     for i in range(1, 21):
         model_path = f'model/opp_{i}'
@@ -69,12 +69,13 @@ def train_with_policy_network(epochs=10000):
                     history['a'].append(action[~done])
                     history['done'].append(done)
 
-                    num = min(env.batch_size, 4)
-                    p = np.zeros((num, 36))
-                    sel = ~done[:4]
-                    len_sel = len(np.where(sel)[0])
-                    p[sel] = policy[:len_sel] / policy[:len_sel].max(axis=1, keepdims=True)
-                    env.paint_canvas(p)
+                    if env.graphics:
+                        num = min(env.batch_size, 4)
+                        p = np.zeros((num, 36))
+                        sel = ~done[:4]
+                        len_sel = len(np.where(sel)[0])
+                        p[sel] = policy[:len_sel] / policy[:len_sel].max(axis=1, keepdims=True)
+                        env.paint_canvas(p)
 
                 state, done, rewards = env.step(env.state, action)
 
@@ -308,7 +309,7 @@ def play_with_mcts():
 if __name__ == '__main__':
     # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
-    env = Env(graphics=False, fps=None, batch_size=128)
+    env = Env(graphics=False, fps=None, batch_size=1024)
     device = torch.device('cuda')
     agent = Network().to(device)
     opponent = Network().to(device)
