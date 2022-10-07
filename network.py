@@ -6,18 +6,18 @@ import torch.nn.functional as f
 class Network(nn.Module):
     def __init__(self):
         super().__init__()
-        features = 10
+        features = 20
         self.conv_block = nn.Sequential(
             nn.Conv2d(4, features, 3, padding=1),
             nn.BatchNorm2d(features),
-            nn.PReLU(features)
+            nn.ReLU()
         )
         self.res_net = nn.ModuleList(
             [
                 nn.Sequential(
                     nn.Conv2d(features, features, 3, padding=1),
                     nn.BatchNorm2d(features),
-                    nn.RReLU(),
+                    nn.ReLU(),
                     nn.Conv2d(features, features, 3, padding=1),
                     nn.BatchNorm2d(features),
                 ) for _ in range(5)
@@ -26,7 +26,7 @@ class Network(nn.Module):
         self.policy_head = nn.Sequential(
             nn.Conv2d(features, 2, 1),
             nn.BatchNorm2d(2),
-            nn.PReLU(),
+            nn.ReLU(),
             nn.Flatten(),
             nn.Linear(72, 36),
         )
@@ -46,7 +46,7 @@ class Network(nn.Module):
         x = self.conv_block(x)
         for block in self.res_net:
             residual = block(x)
-            x = f.rrelu(x + residual)
+            x = f.relu(x + residual)
         return x
 
     def forward_policy_head(self, x, mask):

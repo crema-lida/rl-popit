@@ -11,7 +11,7 @@ from utils import SIZE, from_numpy, choice, augment_data
 
 
 def train_with_policy_network(epochs=10000):
-    model_idx = 6
+    model_idx = 1
     opp_model = {}
     for i in range(1, 21):
         model_path = f'model/opp_{i}'
@@ -20,18 +20,31 @@ def train_with_policy_network(epochs=10000):
 
     start = time()
     for ep in range(epochs + 1):
-        if ep % 100 == 0:
+
+        if ep % 20 == 0:
             model_path = f'model/opp_{model_idx}'
             opp_model[model_path] = agent.state_dict()
             torch.save(opp_model[model_path], model_path)
             model_idx = model_idx + 1 if model_idx < 20 else 1
+
+            for net in agent.policy_network:
+                clip_grad_norm_(net.parameters(), max_norm=0.1, error_if_nonfinite=True)
+                # for name, param in net.named_parameters():
+                #     print(name, param.grad.max().item())
+            policy_optim.step()
+            policy_optim.zero_grad()
+
+            model_state = agent.state_dict()
+            torch.save(model_state, 'model/agent')
+            print('--------------New model state saved!--------------')
+
         model_path = random.sample(list(opp_model.keys()), 1)[0]
         opponent.load_state_dict(opp_model[model_path])
 
         wins = 0
 
-        # Agent makes the first move in the first half batch,
-        # while opponent makes the first move in the second half.
+        # Agent makes the first move in the first batch,
+        # then opponent makes the first move in succession.
         for first_move in range(2):
             player = first_move
             history = {'s': [], 'a': [], 'done': []}  # keeps a record of states and actions
@@ -75,7 +88,7 @@ def train_with_policy_network(epochs=10000):
             wins += 0.5 * (rewards.sum() + env.batch_size)
             rewards = from_numpy(rewards, device)
             for state, action, done in zip(*history.values()):
-                size = len(state)
+                size = len(action)
                 act = np.full((size, 36), False)
                 act[np.arange(size), action] = True
 
@@ -94,16 +107,6 @@ def train_with_policy_network(epochs=10000):
                 # value_optim.step()
                 # value_optim.zero_grad()
 
-        for net in agent.policy_network:
-            total_norm = clip_grad_norm_(net.parameters(), max_norm=1.0, error_if_nonfinite=True)
-            # print('total norm: ', total_norm.item())
-            # for name, param in net.named_parameters():
-            #     print(name, param.grad.max().item())
-        policy_optim.step()
-        policy_optim.zero_grad()
-
-        model_state = agent.state_dict()
-        torch.save(model_state, 'model/agent')
         win_rate = wins / (2 * env.batch_size)
         print(f'Epoch {ep} | {model_path[6:]} | Win Rate: {win_rate * 100:.2f} % | '
               f'elapsed: {time() - start:.2f} s')
@@ -305,7 +308,7 @@ def play_with_mcts():
 if __name__ == '__main__':
     # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
-    env = Env(graphics=True, fps=None, batch_size=128)
+    env = Env(graphics=False, fps=None, batch_size=128)
     device = torch.device('cuda')
     agent = Network().to(device)
     opponent = Network().to(device)
@@ -323,14 +326,14 @@ if __name__ == '__main__':
             else:
                 params['weight'].append(param)
 
-    policy_optim = torch.optim.NAdam([{'params': params['weight'], 'weight_decay': 1e-4},
+    policy_optim = torch.optim.NAdam([{'params': params['weight'], 'weight_decay': 1e-3},
                                       {'params': params['bias'], 'weight_decay': 0}],
                                      lr=2e-3)
     value_optim = torch.optim.Adam(agent.value_head.parameters(),
                                    lr=1e-2, weight_decay=1e-4)
 
-    # train_with_policy_network()
+    train_with_policy_network()
     # train_with_mcts()
-    play_with_mcts()
+    # play_with_mcts()
 
     env.close()
