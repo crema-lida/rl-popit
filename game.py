@@ -80,7 +80,7 @@ class Env:
         self.window.blit(pg.transform.scale(self.screen, size), (0, 0))
         pg.event.pump()
         pg.display.update()
-        if self.fps: self.clock.tick(self.fps)
+        if self.fps and self.mode == 'train': self.clock.tick(self.fps)
 
     def paint_canvas(self, p):
         if not self.graphics: return

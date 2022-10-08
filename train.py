@@ -10,8 +10,8 @@ from network import Network
 from utils import SIZE, from_numpy, choice, augment_data
 
 
-def train_with_policy_network(epochs=10000):
-    model_idx = 7
+def train_with_policy_network(epochs=50000):
+    model_idx = 13
     opp_model = {}
     for i in range(1, 21):
         model_path = f'model/opp_{i}'
@@ -21,22 +21,26 @@ def train_with_policy_network(epochs=10000):
     start = time()
     for ep in range(epochs + 1):
 
-        if ep % 20 == 0:
-            model_path = f'model/opp_{model_idx}'
-            opp_model[model_path] = agent.state_dict()
-            torch.save(opp_model[model_path], model_path)
-            model_idx = model_idx + 1 if model_idx < 20 else 1
-
-            for net in agent.policy_network:
-                clip_grad_norm_(net.parameters(), max_norm=0.1, error_if_nonfinite=True)
-                # for name, param in net.named_parameters():
-                #     print(name, param.grad.max().item())
+        if ep % 5 == 0:
+            for stage in agent.policy_network:
+                for name, param in stage.named_parameters():
+                    total_norm = clip_grad_norm_(param, max_norm=10, error_if_nonfinite=True)
+                    # print('total norm: ', total_norm.item())
+                    # print(name, param)
+                    # if param.grad is not None:
+                    #     print(name, param.grad)
             policy_optim.step()
             policy_optim.zero_grad()
 
             model_state = agent.state_dict()
             torch.save(model_state, 'model/agent')
+
+        if ep % 100 == 0:
+            model_path = f'model/opp_{model_idx}'
+            opp_model[model_path] = agent.state_dict()
+            torch.save(opp_model[model_path], model_path)
             print(f'---------New model state saved to {model_path}---------')
+            model_idx = model_idx + 1 if model_idx < 20 else 1
 
         model_path = random.sample(list(opp_model.keys()), 1)[0]
         opponent.load_state_dict(opp_model[model_path])
@@ -57,6 +61,7 @@ def train_with_policy_network(epochs=10000):
 
                 state = from_numpy(state[~done], device)  # (n, 4, 6, 6)
                 mask = state[:, 1].reshape(-1, 36) != 0
+                state = state - torch.mean(state, dim=(2, 3), keepdim=True)  # zero-center
                 out = cnn[player](state)
                 policy = cnn[player].forward_policy_head(out, mask).detach().cpu().numpy()  # (n, 36)
                 action = np.full(env.batch_size, -1)  # (N,)
@@ -94,9 +99,10 @@ def train_with_policy_network(epochs=10000):
                 act[np.arange(size), action] = True
 
                 action = torch.from_numpy(augment_data(act.reshape((-1, 1, 6, 6))).reshape((-1, 36)))
-                state = from_numpy(augment_data(state), device)
-                mask = state[:, 1].reshape(-1, 36) != 0
-                out = agent(state)
+                _state = from_numpy(augment_data(state), device)
+                mask = _state[:, 1].reshape(-1, 36) != 0
+                _state = _state - torch.mean(_state, dim=(2, 3), keepdim=True)  # zero-center
+                out = agent(_state)
                 policy = agent.forward_policy_head(out, mask)
                 torch.sum(
                     -torch.log(policy[action].clip(min=1e-8)) * rewards[~done].repeat(6)
@@ -132,6 +138,7 @@ def train_with_mcts(epochs=10000):
                     idx = np.arange(len(state[~done]))
                     _state = from_numpy(augment_data(state[~done]), device)  # (n, 4, 6, 6)
                     _mask = _state[:, 1].reshape(-1, 36) != 0
+                    _state = _state - torch.mean(_state, dim=(2, 3), keepdim=True)  # zero-center
                     out = cnn[player](_state)
                     _policy = cnn[player].forward_policy_head(out, _mask)  # (n, 36)
                     policy = _policy[idx].detach().cpu().numpy()
@@ -197,8 +204,9 @@ def train_with_mcts(epochs=10000):
             if player == 0: rewards = -rewards
             wins += 0.5 * (rewards.sum() + env.batch_size)
 
-        for net in agent.policy_network:
-            clip_grad_norm_(net.parameters(), max_norm=1.0, error_if_nonfinite=True)
+        for stage in agent.policy_network:
+            for param in stage.parameters():
+                clip_grad_norm_(param, max_norm=10, error_if_nonfinite=True)
         policy_optim.step()
         policy_optim.zero_grad()
 
@@ -218,6 +226,7 @@ def rollout(state, action):
 
         _state = from_numpy(state[~done], device)
         mask = _state[:, 1].reshape(-1, 36) != 0
+        _state = _state - torch.mean(_state, dim=(2, 3), keepdim=True)  # zero-center
         out = cnn[player](_state)
         policy = cnn[player].forward_policy_head(out, mask).detach().cpu().numpy()
         action = np.full(env.batch_size, -1)
@@ -250,6 +259,7 @@ def play_with_mcts():
             idx = np.arange(len(state[~done]))
             _state = from_numpy(augment_data(state[~done]), device)  # (n, 4, 6, 6)
             _mask = _state[:, 1].reshape(-1, 36) != 0
+            _state = _state - torch.mean(_state, dim=(2, 3), keepdim=True)  # zero-center
             out = cnn[player](_state)
             _policy = cnn[player].forward_policy_head(out, _mask)  # (n, 36)
             policy = _policy[idx].detach().cpu().numpy()
@@ -262,7 +272,7 @@ def play_with_mcts():
 
             turns = env.turns
 
-            for i in range(180):
+            for i in range(120):
                 q = action_value / (1e-5 + n)  # (n, 36)
                 score = q + 10 * policy / (n + 1)  # (n, 36)
                 selection = i if i < 36 else np.argmax(score, axis=1)
@@ -309,7 +319,7 @@ def play_with_mcts():
 if __name__ == '__main__':
     # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
-    env = Env(graphics=True, fps=3, batch_size=1024)
+    env = Env(graphics=False, fps=3, batch_size=128)
     device = torch.device('cuda')
     agent = Network().to(device)
     opponent = Network().to(device)
