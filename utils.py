@@ -7,8 +7,10 @@ SIZE[::5, :] = 2
 SIZE[:, ::5] = 2
 SIZE[::5, ::5] = 1
 
+device = torch.device('cpu')
 
-def from_numpy(arr, device=torch.device('cpu')):
+
+def from_numpy(arr):
     return torch.from_numpy(arr).to(device=device, dtype=torch.float, non_blocking=True)
 
 
@@ -16,6 +18,18 @@ def from_numpy(arr, device=torch.device('cpu')):
 def choice(p):
     """select one integer from range(len(p)) according to p"""
     return np.searchsorted(np.cumsum(p), np.random.rand(1)).clip(None, 35)
+
+
+def to_mask(idx):
+    """convert index array (n,) to a mask (n, 36)"""
+    size = len(idx)
+    mask = torch.full((size, 36), False)
+    mask[torch.arange(size), idx.to(dtype=torch.long)] = True
+    return mask
+
+
+def zero_center(tensor):
+    return tensor - torch.mean(tensor, dim=(2, 3), keepdim=True)
 
 
 @njit
@@ -49,7 +63,6 @@ def update(state, pos):
 @njit(parallel=True)
 def update_batch(state, action):
     for i in prange(len(state)):
-        if action[i] == -1: continue
         update(state[i], (action[i] // 6, action[i] % 6))
 
 

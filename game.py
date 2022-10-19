@@ -12,7 +12,8 @@ class Env:
         self.graphics = graphics
         self.fps = fps
         self.batch_size = batch_size
-        self.state = np.zeros((self.batch_size, 4, 6, 6), dtype=int)
+        self.state = np.zeros((self.batch_size, 2, 6, 6), dtype=int)
+        self.done = np.full(len(self.state), False)
         self.turns = 0
         self.mode = 'train'
 
@@ -44,17 +45,19 @@ class Env:
             self.render(self.state[:4])
 
     def reset(self):
-        self.state = np.zeros((self.batch_size, 4, 6, 6), dtype=int)
+        self.state = np.zeros((self.batch_size, 2, 6, 6), dtype=int)
+        self.done = np.full(len(self.state), False)
         self.turns = 0
-        return self.state, np.full(self.batch_size, False), None
+        return self.state.copy(), np.full(self.batch_size, False), None
 
-    def step(self, state, action):
-        update_batch(state, action)
+    def step(self, state, action, player_idx):
+        update_batch(state, action)  # update game state
+        self.state[~self.done] = state if player_idx == 0 else state[:, [1, 0]]
         self.turns += 1
-        pieces = state[:, :2].sum(axis=(2, 3))
-        done = ~pieces.all(axis=1) if self.turns > 2 else np.full(len(state), False)
-        rewards = np.where(pieces[:, 0] > 0, 1, -1) if np.all(done) else None
-        return state, done, rewards
+        pieces = self.state[:, :2].sum(axis=(2, 3))
+        if self.turns > 2: self.done = ~pieces.all(axis=1)
+        reward = np.where(pieces[:, 0] > 0, 1, -1) if np.all(self.done) else None
+        return self.state[~self.done].copy(), reward, self.done
 
     def render(self, state):
         if not self.graphics: return
@@ -82,9 +85,14 @@ class Env:
         pg.display.update()
         if self.fps and self.mode == 'train': self.clock.tick(self.fps)
 
-    def paint_canvas(self, p):
+    def paint_canvas(self, policy):
         if not self.graphics: return
         import pygame as pg
+
+        p = np.zeros((min(self.batch_size, 4), 36))
+        sel = ~self.done[:4]
+        len_sel = len(np.where(sel)[0])
+        p[sel] = policy[:len_sel] / policy[:len_sel].max(axis=1, keepdims=True)
 
         for j, p in enumerate(p):
             canvas = self.canvas[j]

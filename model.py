@@ -4,7 +4,7 @@ import torch.nn.functional as f
 
 
 class CNN(nn.Module):
-    def __init__(self, in_features=4, num_blocks=2):
+    def __init__(self, in_features=2, num_blocks=2):
         super(CNN, self).__init__()
         features = 64
         self.conv_block = nn.Sequential(
@@ -36,7 +36,7 @@ class CNN(nn.Module):
 
 
 class ResNet(CNN):
-    def __init__(self, in_features=4, num_blocks=3):
+    def __init__(self, in_features=2, num_blocks=3):
         super(ResNet, self).__init__(in_features)
         features = 64
         self.middle_layers = nn.ModuleList(
@@ -93,7 +93,11 @@ class ValueHead(nn.Module):
 
 
 if __name__ == '__main__':
-    import torch.onnx as onnx
+    from torch.utils.tensorboard import SummaryWriter
 
-    x = torch.zeros(128, 4, 6, 6, dtype=torch.float)
-    onnx.export(CNN(), x, './model.onnx')
+    writer = SummaryWriter()
+    cnn = CNN()
+    x = torch.zeros(128, 2, 6, 6, dtype=torch.float)
+    mask = x[:, 1].reshape(-1, 36) != 0
+    writer.add_graph(cnn, x)
+    writer.close()

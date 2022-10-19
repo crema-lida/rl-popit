@@ -2,120 +2,82 @@ import numpy as np
 import torch
 import torch.nn.functional as f
 from torch.nn.utils import clip_grad_norm_
-import os
-from time import time
+from torch.distributions.categorical import Categorical
+from torch.utils.tensorboard import SummaryWriter
+import os, time, pickle
+from tqdm import tqdm, trange
 
 import model
 from game import Env
-from utils import SIZE, from_numpy, choice, augment_data
+from player import Player
+import utils
 
 
-def train_with_policy_network(epochs=50000):
-    model_idx = 1
-    start = time()
-    for ep in range(epochs + 1):
+def train_with_ppo(epochs=10000, minibatch_size=1024, eps=0.2):
+    if os.path.exists(f'{MODEL_DIR}/checkpoint'):
+        with open(f'{MODEL_DIR}/checkpoint', 'rb') as checkpoint:
+            model_idx = pickle.load(checkpoint)
+    else:
+        model_idx = 1
 
-        if ep % 5 == 0:
-            for stage in agent.policy_network:
-                for name, param in stage.named_parameters():
-                    total_norm = clip_grad_norm_(param, max_norm=10, error_if_nonfinite=True)
-                    # print('total norm: ', total_norm.item())
-                    # print(name, param)
-                    # if param.grad is not None:
-                    #     print(name, param.grad)
-            policy_optim.step()
-            policy_optim.zero_grad()
-
-            model_state = agent.state_dict()
-            torch.save(model_state, f'{MODEL_DIR}/agent')
-
+    for ep in trange(epochs, ncols=80, desc='Progress'):
+        # save the latest model for opponent to use
         if ep % 100 == 0:
-            model_path = f'{MODEL_DIR}/opp-{model_idx}'
-            torch.save(agent.state_dict(), model_path)
-            print(f'---------New model state saved to {model_path}---------')
-            model_idx = model_idx + 1 if model_idx < 100 else 1
+            model_path = f'{MODEL_DIR}/opp/model-{model_idx}'
+            torch.save(agent.model.state_dict(), model_path)
+            with open(f'{MODEL_DIR}/checkpoint', 'wb') as checkpoint:
+                pickle.dump(model_idx, checkpoint)
+            tqdm.write(f'New model state saved to {model_path}')
+            if os.path.exists(summary_dir := f'{SUMMARY_DIR}/win_rate_model-{model_idx}'):
+                os.system(f'rm {summary_dir}/*')
+            model_idx = model_idx + 1 if model_idx < 30 else 1
 
-        # randomly select a model from history
-        model_name = np.random.choice(os.listdir(MODEL_DIR))
-        opponent.load_state_dict(torch.load(f'{MODEL_DIR}/{model_name}'))
+        tqdm.write(f'Epoch {ep}'.center(40) + '\n' + 'Opponent     Win Rate (%)'.center(40))
 
-        wins = 0
+        # sample (10 * 2 * batch_size) games by playing with older models
+        for _ in trange(10, ncols=80, leave=False, desc='Self Play'):
+            # randomly select a model from history
+            model_name = np.random.choice(os.listdir(f'{MODEL_DIR}/opp'))
+            opponent.load_state_dict(torch.load(f'{MODEL_DIR}/opp/{model_name}'))
 
-        # agent makes the first move in the first batch,
-        # then opponent makes the first move in succession.
-        for first_move in range(2):
-            player = first_move
-            history = {'s': [], 'a': [], 'done': []}  # keeps a record of states and actions
-            state, done, rewards = env.reset()
+            wins = 0
 
-            while np.any(~done):
-                state[:, [0, 1]] = state[:, [1, 0]]
-                state[:, 2] = np.where(state[:, 0] == SIZE, 1, 0)  # positions full of agent's pieces
-                state[:, 3] = np.where(state[:, 1] == SIZE, 1, 0)  # positions full of opponent's pieces
+            for first_move in range(2):
+                player_idx = first_move
+                state, done, reward = env.reset()
+                while np.any(~done):
+                    if player_idx == 1:
+                        state[:, [0, 1]] = state[:, [1, 0]]
+                    policy, action = Player.select_action(cnn[player_idx], state)
+                    state_new, reward, done_new = env.step(state.copy(), action, player_idx)
 
-                state = from_numpy(state[~done], device)  # (n, 4, 6, 6)
-                mask = state[:, 1].reshape(-1, 36) != 0
-                state = state - torch.mean(state, dim=(2, 3), keepdim=True)  # zero-center
-                out = cnn[player](state)
-                policy = cnn[player].policy_head(out, mask).detach().cpu().numpy()  # (n, 36)
-                action = np.full(env.batch_size, -1)  # (N,)
-                action[~done] = np.concatenate([
-                    choice(p) for p in policy
-                ])
+                    if player_idx == 0:
+                        agent.remember(state, policy, action, done)
+                    elif env.graphics:
+                        policy, _ = Player.select_action(agent.model, state_new)
+                        env.paint_canvas(policy)
+                    if reward is not None:
+                        agent.assign_reward(reward)
+                    state, done = state_new, done_new
+                    env.render(state[:4])
+                    player_idx = 1 - player_idx
 
-                if player == 0:
-                    history['s'].append(env.state[~done])
-                    history['a'].append(action[~done])
-                    history['done'].append(done)
+                wins += 0.5 * (reward.sum() + env.batch_size)
 
-                    if env.graphics:
-                        num = min(env.batch_size, 4)
-                        p = np.zeros((num, 36))
-                        sel = ~done[:4]
-                        len_sel = len(np.where(sel)[0])
-                        p[sel] = policy[:len_sel] / policy[:len_sel].max(axis=1, keepdims=True)
-                        env.paint_canvas(p)
+            win_rate = wins / (2 * env.batch_size) * 100
+            if int(model_name[6:]) % 5 == 1:
+                writer.add_scalars('win_rate', {model_name: win_rate}, ep)
+            tqdm.write(f'{model_name}     {win_rate: .2f}'.center(40))
 
-                state, done, rewards = env.step(env.state, action)
-
-                if player == 0:
-                    env.render(env.state[:4])
-                else:
-                    env.render(env.state[:4, [1, 0]])
-                player = 1 - player
-
-            if player == 0: rewards = -rewards
-            wins += 0.5 * (rewards.sum() + env.batch_size)
-            rewards = from_numpy(rewards, device)
-            for state, action, done in zip(*history.values()):
-                size = len(action)
-                act = np.full((size, 36), False)
-                act[np.arange(size), action] = True
-
-                action = torch.from_numpy(augment_data(act.reshape((-1, 1, 6, 6))).reshape((-1, 36)))
-                _state = from_numpy(augment_data(state), device)
-                mask = _state[:, 1].reshape(-1, 36) != 0
-                _state = _state - torch.mean(_state, dim=(2, 3), keepdim=True)  # zero-center
-                out = agent(_state)
-                policy = agent.policy_head(out, mask)
-                torch.sum(
-                    -torch.log(policy[action].clip(min=1e-8)) * rewards[~done].repeat(6)
-                ).backward()
-
-                # state_value = agent.forward_value_head(out.detach())
-                # value_loss = f.mse_loss(state_value, rewards[~done].unsqueeze(1))
-                # value_loss.backward()
-                # value_optim.step()
-                # value_optim.zero_grad()
-
-        win_rate = wins / (2 * env.batch_size)
-        print(f'Epoch {ep} | {model_name} | Win Rate: {win_rate * 100:.2f} % | '
-              f'elapsed: {time() - start:.2f} s')
+        info = agent.learn(minibatch_size, eps)
+        for tag, data in info.items():
+            writer.add_histogram(tag, torch.concat(data), ep)
+        agent.save_state_dict(MODEL_DIR)
 
 
 def train_with_mcts(epochs=10000):
     cross_entropy = torch.nn.CrossEntropyLoss()
-    start = time()
+    start = time.time()
     for ep in range(epochs + 1):
         opponent.load_state_dict(agent.state_dict())
         wins = 0
@@ -125,12 +87,10 @@ def train_with_mcts(epochs=10000):
             state, done, rewards = env.reset()
             while np.any(~done):
                 state[:, [0, 1]] = state[:, [1, 0]]
-                state[:, 2] = np.where(state[:, 0] == SIZE, 1, 0)  # positions full of agent's pieces
-                state[:, 3] = np.where(state[:, 1] == SIZE, 1, 0)  # positions full of opponent's pieces
 
                 if player == 0:
                     idx = np.arange(len(state[~done]))
-                    _state = from_numpy(augment_data(state[~done]), device)  # (n, 4, 6, 6)
+                    _state = from_numpy(augment_data(state[~done]), device)  # (n, 2, 6, 6)
                     _mask = _state[:, 1].reshape(-1, 36) != 0
                     _state = _state - torch.mean(_state, dim=(2, 3), keepdim=True)  # zero-center
                     out = cnn[player](_state)
@@ -206,7 +166,7 @@ def train_with_mcts(epochs=10000):
 
         win_rate = wins / (2 * env.batch_size)
         print(f'Epoch {ep} | Win Rate: {win_rate * 100:.2f} % | '
-              f'elapsed: {time() - start:.2f} s')
+              f'elapsed: {time.time() - start:.2f} s')
         torch.save(agent.state_dict(), f'{MODEL_DIR}/agent')
 
 
@@ -215,18 +175,13 @@ def rollout(state, action):
     player = 1
     while np.any(~done):
         state[:, [0, 1]] = state[:, [1, 0]]
-        state[:, 2] = np.where(state[:, 0] == SIZE, 1, 0)  # positions full of agent's pieces
-        state[:, 3] = np.where(state[:, 1] == SIZE, 1, 0)  # positions full of opponent's pieces
-
-        _state = from_numpy(state[~done], device)
+        _state = utils.from_numpy(state[~done])
         mask = _state[:, 1].reshape(-1, 36) != 0
         _state = _state - torch.mean(_state, dim=(2, 3), keepdim=True)  # zero-center
         out = cnn[player](_state)
-        policy = cnn[player].policy_head(out, mask).detach().cpu().numpy()
+        policy = cnn[player].policy_head(out, mask).detach().cpu()
         action = np.full(env.batch_size, -1)
-        action[~done] = np.concatenate([
-            choice(p) for p in policy
-        ])
+        action[~done] = Categorical(policy).sample()
 
         state, done, rewards = env.step(state, action)
         player = 1 - player
@@ -235,23 +190,20 @@ def rollout(state, action):
 
 def play_with_mcts():
     assert env.graphics, 'Interactive mode requires graphics=True.'
-    global device
-    device = torch.device('cpu')
+    utils.device = torch.device('cpu')
     for nn in cnn:
-        nn.to(device)
-        nn.to(device)
+        nn.to(utils.device)
+        nn.to(utils.device)
     env.batch_size = 1
     env.mode = 'interactive'
     player = np.random.randint(2)
     state, done, rewards = env.reset()
     while np.any(~done):
         state[:, [0, 1]] = state[:, [1, 0]]
-        state[:, 2] = np.where(state[:, 0] == SIZE, 1, 0)  # positions full of agent's pieces
-        state[:, 3] = np.where(state[:, 1] == SIZE, 1, 0)  # positions full of opponent's pieces
 
         if player == 0:
             idx = np.arange(len(state[~done]))
-            _state = from_numpy(augment_data(state[~done]), device)  # (n, 4, 6, 6)
+            _state = utils.from_numpy(utils.augment_data(state[~done]))  # (n, 2, 6, 6)
             _mask = _state[:, 1].reshape(-1, 36) != 0
             _state = _state - torch.mean(_state, dim=(2, 3), keepdim=True)  # zero-center
             out = cnn[player](_state)
@@ -293,12 +245,8 @@ def play_with_mcts():
                 env.render(env.state[:4])
                 env.turns = turns
 
-            n = from_numpy(augment_data(n.reshape((-1, 1, 6, 6))).reshape((-1, 36)), device)
-            target_p = f.softmax(n, dim=1)
-
-            action[~done] = np.concatenate([
-                choice(p.cpu().numpy()) for p in target_p[idx]
-            ])
+            n = utils.from_numpy(utils.augment_data(n.reshape((-1, 1, 6, 6))).reshape((-1, 36)))
+            action[~done] = np.argmax(n[0])
         else:
             action = env.wait()
 
@@ -311,36 +259,28 @@ def play_with_mcts():
 
 
 if __name__ == '__main__':
-    MODEL_DIR = 'model-cnn2'
-    # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+    MODEL_DIR = 'model-conv3'
+    SUMMARY_DIR = 'runs/' + time.asctime().replace(' ', '-')  # '/tf_logs'
+    # os.system('rm -rf /tf_logs/*')
+    writer = SummaryWriter(SUMMARY_DIR)
 
-    env = Env(graphics=False, fps=3, batch_size=128)
-    device = torch.device('cuda')
-    agent = model.CNN().to(device)
-    opponent = model.CNN().to(device)
-    cnn = [agent, opponent]
+    env = Env(graphics=False, fps=1, batch_size=128)
+    utils.device = torch.device('cuda')
+    in_features = env.state.shape[1]
+    agent = Player(model.CNN(in_features, num_blocks=3).to(utils.device),
+                   lr=2e-4, weight_decay=1e-4)
+    opponent = model.CNN(in_features, num_blocks=3).to(utils.device)
+    cnn = [agent.model, opponent]
 
-    if not os.path.exists(MODEL_DIR):
-        os.mkdir(MODEL_DIR)
+    os.makedirs(f'{MODEL_DIR}/opp', exist_ok=True)
     if os.path.exists(f'{MODEL_DIR}/agent'):
-        model_state = torch.load(f'{MODEL_DIR}/agent')
-        agent.load_state_dict(model_state)
+        agent.model.load_state_dict(torch.load(f'{MODEL_DIR}/agent'))
+    if os.path.exists(f'{MODEL_DIR}/policy_optim'):
+        agent.policy_optim.load_state_dict(torch.load(f'{MODEL_DIR}/policy_optim'))
+    if os.path.exists(f'{MODEL_DIR}/value_optim'):
+        agent.value_optim.load_state_dict(torch.load(f'{MODEL_DIR}/value_optim'))
 
-    params = {'weight': [], 'bias': []}
-    for stage in agent.policy_network:
-        for name, param in stage.named_parameters():
-            if 'bias' in name:
-                params['bias'].append(param)
-            else:
-                params['weight'].append(param)
-
-    policy_optim = torch.optim.NAdam([{'params': params['weight'], 'weight_decay': 1e-3},
-                                      {'params': params['bias'], 'weight_decay': 0}],
-                                     lr=2e-3)
-    value_optim = torch.optim.Adam(agent.value_head.parameters(),
-                                   lr=1e-2, weight_decay=1e-4)
-
-    train_with_policy_network()
+    train_with_ppo(minibatch_size=2048, eps=0.1)
     # train_with_mcts()
     # play_with_mcts()
 
