@@ -8,13 +8,19 @@ from tqdm import tqdm
 import utils
 
 
-class Player:
-    def __init__(self, model, lr=2e-3, weight_decay=1e-4):
+class Agent:
+    def __init__(self, model, minibatch_size=1024,
+                 clip=0.2, entropy_coeff=0.01, max_norm=0.5,
+                 lr=2e-3, weight_decay=1e-4, eps=1e-5):
+        self.minibatch_size = minibatch_size
+        self.clip = clip
+        self.entropy_coeff = entropy_coeff
+        self.max_norm = max_norm
+
         self.model = model
         self.policy_network = self.model.policy_network
         self.policy_head = self.model.policy_head
         self.value_head = self.model.value_head
-
         params = {'weight': [], 'bias': []}
         for stage in self.policy_network:
             for name, param in stage.named_parameters():
@@ -24,7 +30,7 @@ class Player:
                     params['weight'].append(param)
         self.policy_optim = torch.optim.NAdam([{'params': params['weight'], 'weight_decay': weight_decay},
                                                {'params': params['bias'], 'weight_decay': 0}],
-                                              lr=lr)
+                                              lr=lr, eps=eps)
         self.value_optim = torch.optim.NAdam(self.value_head.parameters(),
                                              lr=lr, weight_decay=weight_decay)
 
@@ -57,20 +63,20 @@ class Player:
             self.dataset['r'].append(reward[~done])
         self.history_done.clear()
 
-    def learn(self, minibatch_size, eps):
+    def learn(self):
         dataset = TensorDataset(*(
             utils.from_numpy(np.concatenate(data, axis=0)) for data in self.dataset.values()
         ))
         batch = DataLoader(
             dataset=dataset,
-            batch_size=minibatch_size,
+            batch_size=self.minibatch_size,
             shuffle=True,
             drop_last=True,
         )
         for data in self.dataset.values():
             data.clear()
-        total_step = round(100 * 1024 / minibatch_size)
-        info = {'pi': [], 'pi_ratio': [], 'total_norm': []}
+        total_step = round(100 * 1024 / self.minibatch_size)
+        info = {'pi': [], 'pi_ratio': [], 'total_norm': [], 'entropy': []}
 
         with tqdm(total=total_step, ncols=80, leave=False, desc='Updating policy') as pbar:
             for step, (state, old_pi, action, reward) in enumerate(batch):
@@ -86,15 +92,16 @@ class Player:
                 # reward = utils.from_numpy(reward)  # .repeat(6)
 
                 pi_ratio = policy[action] / old_pi[action]  # (n,)
-                torch.mean(
-                    -torch.min(pi_ratio * reward, pi_ratio.clip(1 - eps, 1 + eps) * reward)
-                ).backward()
+                obj = torch.min(pi_ratio * reward, pi_ratio.clip(1 - self.clip, 1 + self.clip) * reward)
+                entropy = self.entropy_coeff * Categorical(policy).entropy()
+                loss = -torch.mean(obj + entropy)
+                loss.backward()
+                total_norm = clip_grad_norm_(self.model.parameters(), max_norm=self.max_norm, error_if_nonfinite=True)
 
+                info['entropy'].append(entropy.detach())
+                info['total_norm'].append(total_norm.unsqueeze(0))
                 info['pi'].append(old_pi[action].detach())
                 info['pi_ratio'].append(pi_ratio.detach())
-
-                total_norm = clip_grad_norm_(self.model.parameters(), max_norm=10, error_if_nonfinite=True)
-                info['total_norm'].append(total_norm.unsqueeze(0))
                 # for stage in self.policy_network:
                 #     for name, param in stage.named_parameters():
                 #         print(name, param.grad)

@@ -9,14 +9,14 @@ class CNN(nn.Module):
         features = 64
         self.conv_block = nn.Sequential(
             nn.Conv2d(in_features, features, 3, padding=1),
-            nn.BatchNorm2d(features),
+            # nn.BatchNorm2d(features),
             nn.Tanh(),
         )
         self.middle_layers = nn.ModuleList(
             [
                 nn.Sequential(
                     nn.Conv2d(features, features, 3, padding=1),
-                    nn.BatchNorm2d(features),
+                    # nn.BatchNorm2d(features),
                     nn.Tanh(),
                 ) for _ in range(num_blocks)
             ]
@@ -63,7 +63,7 @@ class PolicyHead(nn.Module):
         super(PolicyHead, self).__init__()
         self.layers = nn.Sequential(
             nn.Conv2d(features, 2, 1),
-            nn.BatchNorm2d(2),
+            # nn.BatchNorm2d(2),
             nn.ReLU(),
             nn.Flatten(),
             nn.Linear(72, 36),

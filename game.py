@@ -8,11 +8,11 @@ COLOR = (84, 186, 185), (255, 91, 0)
 
 
 class Env:
-    def __init__(self, graphics=False, fps: int = None, batch_size=128):
+    def __init__(self, graphics=False, fps: int = None, num_envs=128):
         self.graphics = graphics
         self.fps = fps
-        self.batch_size = batch_size
-        self.state = np.zeros((self.batch_size, 2, 6, 6), dtype=int)
+        self.num_envs = num_envs
+        self.state = np.zeros((self.num_envs, 2, 6, 6), dtype=int)
         self.done = np.full(len(self.state), False)
         self.turns = 0
         self.mode = 'train'
@@ -45,10 +45,10 @@ class Env:
             self.render(self.state[:4])
 
     def reset(self):
-        self.state = np.zeros((self.batch_size, 2, 6, 6), dtype=int)
+        self.state = np.zeros((self.num_envs, 2, 6, 6), dtype=int)
         self.done = np.full(len(self.state), False)
         self.turns = 0
-        return self.state.copy(), np.full(self.batch_size, False), None
+        return self.state.copy(), np.full(self.num_envs, False), None
 
     def step(self, state, action, player_idx):
         update_batch(state, action)  # update game state
@@ -89,7 +89,7 @@ class Env:
         if not self.graphics: return
         import pygame as pg
 
-        p = np.zeros((min(self.batch_size, 4), 36))
+        p = np.zeros((min(self.num_envs, 4), 36))
         sel = ~self.done[:4]
         len_sel = len(np.where(sel)[0])
         p[sel] = policy[:len_sel] / policy[:len_sel].max(axis=1, keepdims=True)
