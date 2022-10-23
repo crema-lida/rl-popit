@@ -39,10 +39,11 @@ class Agent:
         self.dataset = {'s': [], 'p': [], 'a': [], 'r': []}
         self.history_done = []
 
-    def save_checkpoint(self, model_dir):
-        torch.save(self.model.state_dict(), f'{model_dir}/agent')
-        torch.save(self.policy_optim.state_dict(), f'{model_dir}/policy_optim')
-        torch.save(self.value_optim.state_dict(), f'{model_dir}/value_optim')
+    def save_checkpoint(self, ep, model_dir):
+        torch.save({'epoch': ep,
+                    'model': self.model.state_dict(),
+                    'policy_optim': self.policy_optim.state_dict(),
+                    'value_optim': self.value_optim.state_dict()}, f'{model_dir}/checkpoint')
 
     @staticmethod
     def select_action(model, state):

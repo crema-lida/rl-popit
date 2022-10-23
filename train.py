@@ -13,63 +13,67 @@ from agent import Agent
 import utils
 
 
-def train_with_ppo(epochs=20000, sample_loops=10, max_saved_models=10, drop_threshold=85):
+def train_with_ppo(epochs=20000, ep_start=0, sample_loops=10, max_saved_models=10, drop_threshold=85):
     last_saved = 0
-    for ep in trange(epochs, ncols=80, desc='Progress'):
-        if ep % 100 == 0 and len(os.listdir(f'{MODEL_DIR}/opp')) < max_saved_models:
-            model_path = f'{MODEL_DIR}/opp/model-{ep}'
-            torch.save(agent.model.state_dict(), model_path)
-            last_saved = ep
-        tqdm.write(f'Epoch {ep}'.center(45) + '\n' + 'Opponent     Win Rate (%)'.center(45))
+    with tqdm(total=epochs, ncols=80, desc='Progress') as tbar_main:
+        tbar_main.update(ep_start)
+        for ep in range(ep_start, epochs):
+            tbar_main.update(1)
+            tbar_main.set_postfix_str(f'lr={agent.scheduler.get_last_lr()[0]:.2e}')
+            tqdm.write(f'Epoch {ep}'.center(45) + '\n' + 'Opponent     Win Rate (%)'.center(45))
+            if ep % 100 == 0 and len(os.listdir(f'{MODEL_DIR}/opp')) < max_saved_models:
+                model_path = f'{MODEL_DIR}/opp/model-{ep}'
+                torch.save(agent.model.state_dict(), model_path)
+                last_saved = ep
 
-        # sample (loops * batch_size) games by playing with older models
-        agent.model.eval()
-        with tqdm(total=sample_loops, ncols=80, leave=False, desc='Self Play') as tbar:
-            for _ in range(sample_loops // 2):
-                dirlist = os.listdir(f'{MODEL_DIR}/opp')
-                model_name = np.random.choice(dirlist)  # randomly select a model from history
-                opponent.load_state_dict(torch.load(f'{MODEL_DIR}/opp/{model_name}'))
-                wins = 0
-                for first_move in range(2):
-                    tbar.update(1)
-                    player_idx = first_move
-                    state, done, reward = env.reset()
-                    while np.any(~done):
-                        if player_idx == 1:
-                            state[:, [0, 1]] = state[:, [1, 0]]
-                        policy, action = Agent.select_action(cnn[player_idx], state)
-                        state_new, reward, done_new = env.step(state.copy(), action, player_idx)
+            # sample (loops * batch_size) games by playing with older models
+            agent.model.eval()
+            with tqdm(total=sample_loops, ncols=80, leave=False, desc='Self Play') as tbar:
+                for _ in range(sample_loops // 2):
+                    dirlist = os.listdir(f'{MODEL_DIR}/opp')
+                    model_name = np.random.choice(dirlist)  # randomly select a model from history
+                    opponent.load_state_dict(torch.load(f'{MODEL_DIR}/opp/{model_name}'))
+                    wins = 0
+                    for first_move in range(2):
+                        tbar.update(1)
+                        player_idx = first_move
+                        state, done, reward = env.reset()
+                        while np.any(~done):
+                            if player_idx == 1:
+                                state[:, [0, 1]] = state[:, [1, 0]]
+                            policy, action = Agent.select_action(cnn[player_idx], state)
+                            state_new, reward, done_new = env.step(state.copy(), action, player_idx)
 
-                        if player_idx == 0:
-                            agent.remember(state, policy, action, done)
-                        elif env.graphics:
-                            policy, _ = Agent.select_action(agent.model, state_new)
-                            env.paint_canvas(policy)
+                            if player_idx == 0:
+                                agent.remember(state, policy, action, done)
+                            elif env.graphics:
+                                policy, _ = Agent.select_action(agent.model, state_new)
+                                env.paint_canvas(policy)
 
-                        state, done = state_new, done_new
-                        env.render()
-                        player_idx = 1 - player_idx
+                            state, done = state_new, done_new
+                            env.render()
+                            player_idx = 1 - player_idx
 
-                    agent.assign_reward(reward)
-                    wins += 0.5 * (reward.sum() + env.num_envs)
+                        agent.assign_reward(reward)
+                        wins += 0.5 * (reward.sum() + env.num_envs)
 
-                win_rate = wins / (2 * env.num_envs) * 100
-                writer.add_scalars('win_rate', {model_name: win_rate}, ep)
-                tqdm.write(f'{model_name}     {win_rate: .2f}'.center(40))
-                if win_rate > drop_threshold or ep - last_saved > 500:
-                    # remove the old model, and save the latest for opponent to use
-                    os.remove(f'{MODEL_DIR}/opp/{model_name}')
-                    model_path = f'{MODEL_DIR}/opp/model-{ep}'
-                    torch.save(agent.model.state_dict(), model_path)
-                    tqdm.write(f'New model state saved to {model_path}')
-                    last_saved = ep
+                    win_rate = wins / (2 * env.num_envs) * 100
+                    writer.add_scalars('win_rate', {model_name: win_rate}, ep)
+                    tqdm.write(f'{model_name}     {win_rate: .2f}'.center(40))
+                    if win_rate > drop_threshold or ep - last_saved > 500:
+                        # remove the old model, and save the latest for opponent to use
+                        os.remove(f'{MODEL_DIR}/opp/{model_name}')
+                        model_path = f'{MODEL_DIR}/opp/model-{ep}'
+                        torch.save(agent.model.state_dict(), model_path)
+                        tqdm.write(f'New model state saved to {model_path}')
+                        last_saved = ep
 
-        agent.model.train()
-        info = agent.learn()
-        agent.scheduler.step()
-        for tag, data in info.items():
-            writer.add_histogram(tag, torch.concat(data), ep)
-        agent.save_checkpoint(MODEL_DIR)
+            agent.model.train()
+            info = agent.learn()
+            agent.scheduler.step(ep)
+            for tag, data in info.items():
+                writer.add_histogram(tag, torch.concat(data), ep)
+            agent.save_checkpoint(ep, MODEL_DIR)
 
 
 def train_with_mcts(epochs=10000):
@@ -257,7 +261,7 @@ def play_with_mcts():
 
 if __name__ == '__main__':
     # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
-    MODEL_DIR = 'test'
+    MODEL_DIR = 'resnet3'
     SUMMARY_DIR = 'runs/' + time.asctime().replace(' ', '-')  # '/tf_logs'
     # os.system('rm -rf /tf_logs/*')
     writer = SummaryWriter(SUMMARY_DIR)
@@ -266,20 +270,22 @@ if __name__ == '__main__':
     utils.device = torch.device('cuda')
     in_features = env.state.shape[1]
     agent = Agent(network.ResNet(in_features, num_blocks=3).to(utils.device),
-                  minibatch_size=2048, clip=0.1, entropy_coeff=0.005, max_norm=0.5,
+                  minibatch_size=2048, clip=0.1, entropy_coeff=0.01, max_norm=0.5,
                   lr=1e-3, weight_decay=1e-4, eps=1e-5)
     opponent = network.ResNet(in_features, num_blocks=3).to(utils.device).eval()
     cnn = [agent.model, opponent]
 
     os.makedirs(f'{MODEL_DIR}/opp', exist_ok=True)
-    if os.path.exists(f'{MODEL_DIR}/agent'):
-        agent.model.load_state_dict(torch.load(f'{MODEL_DIR}/agent'))
-    if os.path.exists(f'{MODEL_DIR}/policy_optim'):
-        agent.policy_optim.load_state_dict(torch.load(f'{MODEL_DIR}/policy_optim'))
-    if os.path.exists(f'{MODEL_DIR}/value_optim'):
-        agent.value_optim.load_state_dict(torch.load(f'{MODEL_DIR}/value_optim'))
+    if os.path.exists(f'{MODEL_DIR}/checkpoint'):
+        checkpoint = torch.load(f'{MODEL_DIR}/checkpoint')
+        agent.model.load_state_dict(checkpoint['model'])
+        agent.policy_optim.load_state_dict(checkpoint['policy_optim'])
+        agent.value_optim.load_state_dict(checkpoint['value_optim'])
+        ep = checkpoint['epoch']
+    else:
+        ep = 0
 
-    train_with_ppo(epochs=20000, sample_loops=20,
+    train_with_ppo(epochs=20000, ep_start=ep, sample_loops=20,
                    max_saved_models=10, drop_threshold=85)
     # train_with_mcts()
     # play_with_mcts()
