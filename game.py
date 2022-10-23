@@ -1,5 +1,5 @@
 import numpy as np
-from utils import update_batch, allocate_spots
+from utils import update_game_state, allocate_spots
 
 BLACK = (61, 60, 66)
 WHITE = (255, 255, 255)
@@ -8,7 +8,7 @@ COLOR = (84, 186, 185), (255, 91, 0)
 
 
 class Env:
-    def __init__(self, graphics=False, fps: int = None, num_envs=128):
+    def __init__(self, graphics=False, fps: int = None, num_envs=64):
         self.graphics = graphics
         self.fps = fps
         self.num_envs = num_envs
@@ -42,7 +42,7 @@ class Env:
 
             self.clock = pg.time.Clock()
             self.font = pg.font.Font(pg.font.get_default_font(), 17)
-            self.render(self.state[:4])
+            self.render()
 
     def reset(self):
         self.state = np.zeros((self.num_envs, 2, 6, 6), dtype=int)
@@ -51,7 +51,7 @@ class Env:
         return self.state.copy(), np.full(self.num_envs, False), None
 
     def step(self, state, action, player_idx):
-        update_batch(state, action)  # update game state
+        state = update_game_state(state, action)
         self.state[~self.done] = state if player_idx == 0 else state[:, [1, 0]]
         self.turns += 1
         pieces = self.state[:, :2].sum(axis=(2, 3))
@@ -59,13 +59,13 @@ class Env:
         reward = np.where(pieces[:, 0] > 0, 1, -1) if np.all(self.done) else None
         return self.state[~self.done].copy(), reward, self.done
 
-    def render(self, state):
+    def render(self):
         if not self.graphics: return
         import pygame as pg
 
         self.screen.fill(WHITE)
 
-        for n, state in enumerate(state):
+        for n, state in enumerate(self.state[:4]):
             canvas, rect = self.canvas[n], self.rect[n]
             self.screen.blit(canvas, rect)
             for player in (0, 1):

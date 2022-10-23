@@ -33,20 +33,22 @@ class Agent:
                                               lr=lr, eps=eps)
         self.value_optim = torch.optim.NAdam(self.value_head.parameters(),
                                              lr=lr, weight_decay=weight_decay)
+        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(self.policy_optim,
+                                                                              T_0=100, eta_min=1e-5)
 
         self.dataset = {'s': [], 'p': [], 'a': [], 'r': []}
         self.history_done = []
 
-    def save_state_dict(self, model_dir):
+    def save_checkpoint(self, model_dir):
         torch.save(self.model.state_dict(), f'{model_dir}/agent')
         torch.save(self.policy_optim.state_dict(), f'{model_dir}/policy_optim')
         torch.save(self.value_optim.state_dict(), f'{model_dir}/value_optim')
 
     @staticmethod
     def select_action(model, state):
-        _state = utils.from_numpy(state)  # (n, 2, 6, 6)
-        mask = _state[:, 1].reshape(-1, 36) != 0
-        _state = utils.zero_center(_state)
+        mask = torch.from_numpy(state[:, 1].reshape(-1, 36) != 0).to(device=utils.device, non_blocking=True)
+        state = utils.zero_center(state)
+        _state = torch.from_numpy(state.astype(np.single)).to(device=utils.device)  # (n, 2, 6, 6)
         with torch.no_grad():
             out = model(_state)
             policy = model.policy_head(out, mask).cpu()  # (n, 36)
@@ -63,33 +65,38 @@ class Agent:
             self.dataset['r'].append(reward[~done])
         self.history_done.clear()
 
+    def gather_data(self):
+        raw_data = [np.concatenate(data, axis=0) for data in self.dataset.values()]  # [state, policy, action, reward]
+        raw_data.append(raw_data[0][:, 1].reshape(-1, 36) != 0)  # create masks for softmax
+        raw_data[0] = utils.zero_center(raw_data[0].astype(np.single))  # zero-center states
+        raw_data[2] = utils.to_mask(raw_data[2])  # convert actions (n,) to masks (n, 36)
+        return map(torch.from_numpy, raw_data)
+
     def learn(self):
-        dataset = TensorDataset(*(
-            utils.from_numpy(np.concatenate(data, axis=0)) for data in self.dataset.values()
-        ))
+        dataset = TensorDataset(*self.gather_data())
         batch = DataLoader(
             dataset=dataset,
             batch_size=self.minibatch_size,
             shuffle=True,
             drop_last=True,
+            num_workers=8,
+            pin_memory=True,
         )
         for data in self.dataset.values():
             data.clear()
-        total_step = round(100 * 1024 / self.minibatch_size)
         info = {'pi': [], 'pi_ratio': [], 'total_norm': [], 'entropy': []}
 
-        with tqdm(total=total_step, ncols=80, leave=False, desc='Updating policy') as pbar:
-            for step, (state, old_pi, action, reward) in enumerate(batch):
+        with tqdm(total=len(batch), ncols=80, leave=False, desc='Updating policy') as pbar:
+            for dataset in batch:
+                state, old_pi, action, reward, mask = map(lambda data: data.to(device=utils.device, non_blocking=True),
+                                                          dataset)
                 pbar.update(1)
-                # state = utils.from_numpy(state)  # utils.from_numpy(utils.augment_data(state))
-                mask = state[:, 1].reshape(-1, 36) != 0
-                state = utils.zero_center(state)
+                # state = utils.from_numpy(utils.augment_data(state))
                 out = self.model(state)
                 policy = self.policy_head(out, mask)
-                # old_pi = utils.from_numpy(old_pi)  # utils.augment_data(old_pi.reshape((-1, 1, 6, 6))).reshape((-1, 36))
-                action = utils.to_mask(action)  # (n,) --> (n, 36)
-                # _action = torch.from_numpy(action)  # utils.augment_data(action.reshape((-1, 1, 6, 6))).reshape((-1, 36))
-                # reward = utils.from_numpy(reward)  # .repeat(6)
+                # utils.augment_data(old_pi.reshape((-1, 1, 6, 6))).reshape((-1, 36))
+                # utils.augment_data(action.reshape((-1, 1, 6, 6))).reshape((-1, 36))
+                # reward = reward.repeat(6)
 
                 pi_ratio = policy[action] / old_pi[action]  # (n,)
                 obj = torch.min(pi_ratio * reward, pi_ratio.clip(1 - self.clip, 1 + self.clip) * reward)

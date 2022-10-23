@@ -1,6 +1,6 @@
 import numpy as np
 import torch
-from numba import njit, prange
+from numba import njit, guvectorize, int64
 
 SIZE = np.full((6, 6), 3, dtype=int)
 SIZE[::5, :] = 2
@@ -10,26 +10,16 @@ SIZE[::5, ::5] = 1
 device = torch.device('cpu')
 
 
-def from_numpy(arr):
-    return torch.from_numpy(arr).to(device=device, dtype=torch.float, non_blocking=True)
-
-
-@njit
-def choice(p):
-    """select one integer from range(len(p)) according to p"""
-    return np.searchsorted(np.cumsum(p), np.random.rand(1)).clip(None, 35)
-
-
-def to_mask(idx):
-    """convert index array (n,) to a mask (n, 36)"""
-    size = len(idx)
-    mask = torch.full((size, 36), False)
-    mask[torch.arange(size), idx.to(dtype=torch.long)] = True
+def to_mask(indices):
+    """convert indices (n,) to masks (n, 36)"""
+    size = len(indices)
+    mask = np.full((size, 36), False)
+    mask[np.arange(size), indices] = True
     return mask
 
 
-def zero_center(tensor):
-    return tensor - torch.mean(tensor, dim=(2, 3), keepdim=True)
+def zero_center(arr):
+    return arr - np.mean(arr, axis=(2, 3), keepdims=True)
 
 
 @njit
@@ -41,29 +31,29 @@ def augment_data(arr):
     return np.concatenate((arr, flipud, fliplr, rot_180, rot_90l, rot_90r))
 
 
-@njit
-def update(state, pos):
-    state[0][pos] += 1
+@guvectorize([(int64[:, :, :], int64, int64[:, :, :])],
+             '(C,K,K),()->(C,K,K)',
+             target='parallel', nopython=True)
+def update_game_state(state, action, new_state):
+    new_state[:] = state[:]
+    indices = {action: 1}
+    while len(indices) > 0:
+        idx, n = indices.popitem()
+        i, j = idx // 6, idx % 6
+        new_state[0][i, j] += n
 
-    if state[0][pos] > SIZE[pos]:
-        state[0][pos] = 0
-        neighbors = []
-        i, j = pos
-        for i, j in ((i, j + 1), (i + 1, j), (i, j - 1), (i - 1, j)):
-            if 0 <= i < 6 and 0 <= j < 6:
-                neighbors.append((i, j))
-
-        for pos in neighbors:
-            state[0][pos] += state[1][pos]
-            state[1][pos] = 0
-            if state[1].sum() == 0: return
-            update(state, pos)
-
-
-@njit(parallel=True)
-def update_batch(state, action):
-    for i in prange(len(state)):
-        update(state[i], (action[i] // 6, action[i] % 6))
+        if new_state[0][i, j] > SIZE[i, j]:
+            new_state[0][i, j] -= SIZE[i, j] + 1
+            neighbors = []
+            for i, j in ((i, j + 1), (i + 1, j), (i, j - 1), (i - 1, j)):
+                if 0 <= i < 6 and 0 <= j < 6:
+                    neighbors.append((i, j))
+            for i, j in neighbors:
+                new_state[0][i, j] += new_state[1][i, j]
+                new_state[1][i, j] = 0
+                if new_state[1].sum() == 0: return
+                idx = i * 6 + j
+                indices[idx] = 1 if idx not in indices else indices[idx] + 1
 
 
 def allocate_spots(num):

@@ -13,18 +13,17 @@ from agent import Agent
 import utils
 
 
-def train_with_ppo(epochs=10000, sample_loops=10, max_saved_models=10, drop_threshold=95):
-    # while (idx := len(os.listdir(f'{MODEL_DIR}/opp'))) < max_saved_models:
-    #     model_path = f'{MODEL_DIR}/opp/model-{idx + 1}'
-    #     torch.save(agent.model.state_dict(), model_path)
-    model_idx = 1
-    model_path = f'{MODEL_DIR}/opp/model-{model_idx}'
-    torch.save(agent.model.state_dict(), model_path)
-
+def train_with_ppo(epochs=20000, sample_loops=10, max_saved_models=10, drop_threshold=85):
+    last_saved = 0
     for ep in trange(epochs, ncols=80, desc='Progress'):
+        if ep % 100 == 0 and len(os.listdir(f'{MODEL_DIR}/opp')) < max_saved_models:
+            model_path = f'{MODEL_DIR}/opp/model-{ep}'
+            torch.save(agent.model.state_dict(), model_path)
+            last_saved = ep
         tqdm.write(f'Epoch {ep}'.center(45) + '\n' + 'Opponent     Win Rate (%)'.center(45))
 
         # sample (loops * batch_size) games by playing with older models
+        agent.model.eval()
         with tqdm(total=sample_loops, ncols=80, leave=False, desc='Self Play') as tbar:
             for _ in range(sample_loops // 2):
                 dirlist = os.listdir(f'{MODEL_DIR}/opp')
@@ -48,7 +47,7 @@ def train_with_ppo(epochs=10000, sample_loops=10, max_saved_models=10, drop_thre
                             env.paint_canvas(policy)
 
                         state, done = state_new, done_new
-                        env.render(state[:4])
+                        env.render()
                         player_idx = 1 - player_idx
 
                     agent.assign_reward(reward)
@@ -57,21 +56,20 @@ def train_with_ppo(epochs=10000, sample_loops=10, max_saved_models=10, drop_thre
                 win_rate = wins / (2 * env.num_envs) * 100
                 writer.add_scalars('win_rate', {model_name: win_rate}, ep)
                 tqdm.write(f'{model_name}     {win_rate: .2f}'.center(40))
-                # if win_rate > drop_threshold:
-                if (ep % 100 == 0 and ep > 1 and model_idx < 5) or (model_idx == 1 and win_rate > 70):
-                    model_idx += 1
-                    model_path = f'{MODEL_DIR}/opp/{model_idx}'
-                    # save the latest model for opponent to use
-                    # model_path = f'{MODEL_DIR}/opp/{model_name}'
+                if win_rate > drop_threshold or ep - last_saved > 500:
+                    # remove the old model, and save the latest for opponent to use
+                    os.remove(f'{MODEL_DIR}/opp/{model_name}')
+                    model_path = f'{MODEL_DIR}/opp/model-{ep}'
                     torch.save(agent.model.state_dict(), model_path)
                     tqdm.write(f'New model state saved to {model_path}')
-                    if os.path.exists(summary_dir := f'{SUMMARY_DIR}/win_rate_{model_name}'):
-                        os.system(f'rm {summary_dir}/*')
+                    last_saved = ep
 
+        agent.model.train()
         info = agent.learn()
+        agent.scheduler.step()
         for tag, data in info.items():
             writer.add_histogram(tag, torch.concat(data), ep)
-        agent.save_state_dict(MODEL_DIR)
+        agent.save_checkpoint(MODEL_DIR)
 
 
 def train_with_mcts(epochs=10000):
@@ -258,18 +256,19 @@ def play_with_mcts():
 
 
 if __name__ == '__main__':
-    MODEL_DIR = 'model-conv3-demo'
+    # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+    MODEL_DIR = 'test'
     SUMMARY_DIR = 'runs/' + time.asctime().replace(' ', '-')  # '/tf_logs'
     # os.system('rm -rf /tf_logs/*')
     writer = SummaryWriter(SUMMARY_DIR)
 
-    env = Env(graphics=False, fps=3, num_envs=128)
+    env = Env(graphics=False, fps=3, num_envs=64)
     utils.device = torch.device('cuda')
     in_features = env.state.shape[1]
-    agent = Agent(network.CNN(in_features, num_blocks=3).to(utils.device),
-                  minibatch_size=2048, clip=0.1, entropy_coeff=0.01, max_norm=1,
-                  lr=2e-3, weight_decay=1e-4, eps=1e-5)
-    opponent = network.CNN(in_features, num_blocks=3).to(utils.device)
+    agent = Agent(network.ResNet(in_features, num_blocks=3).to(utils.device),
+                  minibatch_size=2048, clip=0.1, entropy_coeff=0.005, max_norm=0.5,
+                  lr=1e-3, weight_decay=1e-4, eps=1e-5)
+    opponent = network.ResNet(in_features, num_blocks=3).to(utils.device).eval()
     cnn = [agent.model, opponent]
 
     os.makedirs(f'{MODEL_DIR}/opp', exist_ok=True)
@@ -280,8 +279,8 @@ if __name__ == '__main__':
     if os.path.exists(f'{MODEL_DIR}/value_optim'):
         agent.value_optim.load_state_dict(torch.load(f'{MODEL_DIR}/value_optim'))
 
-    train_with_ppo(epochs=10000, sample_loops=20,
-                   max_saved_models=10, drop_threshold=95)
+    train_with_ppo(epochs=20000, sample_loops=20,
+                   max_saved_models=10, drop_threshold=85)
     # train_with_mcts()
     # play_with_mcts()
 

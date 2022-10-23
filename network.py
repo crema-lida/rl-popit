@@ -9,14 +9,14 @@ class CNN(nn.Module):
         features = 64
         self.conv_block = nn.Sequential(
             nn.Conv2d(in_features, features, 3, padding=1),
-            # nn.BatchNorm2d(features),
+            nn.BatchNorm2d(features),
             nn.Tanh(),
         )
         self.middle_layers = nn.ModuleList(
             [
                 nn.Sequential(
                     nn.Conv2d(features, features, 3, padding=1),
-                    # nn.BatchNorm2d(features),
+                    nn.BatchNorm2d(features),
                     nn.Tanh(),
                 ) for _ in range(num_blocks)
             ]
@@ -63,8 +63,8 @@ class PolicyHead(nn.Module):
         super(PolicyHead, self).__init__()
         self.layers = nn.Sequential(
             nn.Conv2d(features, 2, 1),
-            # nn.BatchNorm2d(2),
-            nn.ReLU(),
+            nn.BatchNorm2d(2),
+            nn.Tanh(),
             nn.Flatten(),
             nn.Linear(72, 36),
         )
@@ -93,11 +93,8 @@ class ValueHead(nn.Module):
 
 
 if __name__ == '__main__':
-    from torch.utils.tensorboard import SummaryWriter
-
-    writer = SummaryWriter()
-    cnn = CNN()
-    x = torch.zeros(128, 2, 6, 6, dtype=torch.float)
-    mask = x[:, 1].reshape(-1, 36) != 0
-    writer.add_graph(cnn, x)
-    writer.close()
+    resnet = ResNet()
+    resnet.load_state_dict(torch.load('resnet3/agent'))
+    # for name, param in resnet.named_parameters():
+    #     print(name, param.shape, param)
+    print(resnet.state_dict())
