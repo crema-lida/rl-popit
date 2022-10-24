@@ -26,8 +26,8 @@ def zero_center(arr):
 def augment_data(arr):
     flipud, fliplr = arr[..., ::-1, :], arr[..., ::-1]
     rot_180 = flipud[..., ::-1]
-    rot_90l = np.transpose(arr[..., ::-1], (0, 1, 3, 2))
-    rot_90r = np.transpose(arr[..., ::-1, :], (0, 1, 3, 2))
+    rot_90l = np.transpose(fliplr, (0, 1, 3, 2))
+    rot_90r = np.transpose(flipud, (0, 1, 3, 2))
     return np.concatenate((arr, flipud, fliplr, rot_180, rot_90l, rot_90r))
 
 

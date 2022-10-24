@@ -11,7 +11,8 @@ import utils
 class Agent:
     def __init__(self, model, minibatch_size=1024,
                  clip=0.2, entropy_coeff=0.01, max_norm=0.5,
-                 lr=2e-3, weight_decay=1e-4, eps=1e-5):
+                 lr=2e-3, weight_decay=1e-4, eps=1e-5,
+                 t_max=20000, min_lr=1e-5):
         self.minibatch_size = minibatch_size
         self.clip = clip
         self.entropy_coeff = entropy_coeff
@@ -33,20 +34,28 @@ class Agent:
                                               lr=lr, eps=eps)
         self.value_optim = torch.optim.NAdam(self.value_head.parameters(),
                                              lr=lr, weight_decay=weight_decay)
-        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(self.policy_optim,
-                                                                              T_0=100, eta_min=1e-5)
+        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.policy_optim,
+                                                                    T_max=t_max, eta_min=min_lr)
 
         self.dataset = {'s': [], 'p': [], 'a': [], 'r': []}
         self.history_done = []
 
-    def save_checkpoint(self, ep, model_dir):
-        torch.save({'epoch': ep,
-                    'model': self.model.state_dict(),
-                    'policy_optim': self.policy_optim.state_dict(),
-                    'value_optim': self.value_optim.state_dict()}, f'{model_dir}/checkpoint')
+    def save_checkpoint(self, model_dir, ep):
+        torch.save({
+            'epoch': ep,
+            'model': self.model.state_dict(),
+            'policy_optim': self.policy_optim.state_dict(),
+            'value_optim': self.value_optim.state_dict(),
+            'scheduler': self.scheduler.state_dict(),
+        }, f'{model_dir}/checkpoint')
+
+    def save_as_opponent(self, model_dir, ep):
+        model_path = f'{model_dir}/opp/model-{ep}'
+        torch.save(self.model.state_dict(), model_path)
+        tqdm.write(f'New model state saved to {model_path}')
 
     @staticmethod
-    def select_action(model, state):
+    def choose_action(model, state):
         mask = torch.from_numpy(state[:, 1].reshape(-1, 36) != 0).to(device=utils.device, non_blocking=True)
         state = utils.zero_center(state)
         _state = torch.from_numpy(state.astype(np.single)).to(device=utils.device)  # (n, 2, 6, 6)
@@ -85,20 +94,15 @@ class Agent:
         )
         for data in self.dataset.values():
             data.clear()
-        info = {'pi': [], 'pi_ratio': [], 'total_norm': [], 'entropy': []}
+        info = {'pi': [], 'entropy': [], 'pi_ratio': [], 'total_norm': []}
 
-        with tqdm(total=len(batch), ncols=80, leave=False, desc='Updating policy') as pbar:
+        with tqdm(total=len(batch), ncols=80, leave=False, desc='Updating policy') as tbar:
             for dataset in batch:
+                tbar.update(1)
                 state, old_pi, action, reward, mask = map(lambda data: data.to(device=utils.device, non_blocking=True),
                                                           dataset)
-                pbar.update(1)
-                # state = utils.from_numpy(utils.augment_data(state))
                 out = self.model(state)
                 policy = self.policy_head(out, mask)
-                # utils.augment_data(old_pi.reshape((-1, 1, 6, 6))).reshape((-1, 36))
-                # utils.augment_data(action.reshape((-1, 1, 6, 6))).reshape((-1, 36))
-                # reward = reward.repeat(6)
-
                 pi_ratio = policy[action] / old_pi[action]  # (n,)
                 obj = torch.min(pi_ratio * reward, pi_ratio.clip(1 - self.clip, 1 + self.clip) * reward)
                 entropy = self.entropy_coeff * Categorical(policy).entropy()
@@ -115,5 +119,28 @@ class Agent:
                 #         print(name, param.grad)
                 self.policy_optim.step()
                 self.policy_optim.zero_grad()
-
         return info
+
+    def rollout(self, state, action, num_turns):
+        state_t = state.copy()
+        done = np.full(len(state_t), False)
+
+        def step(state, action, player_idx):
+            nonlocal state_t, done, num_turns
+            state = utils.update_game_state(state, action)
+            state_t[~done] = state if player_idx == 0 else state[:, [1, 0]]
+            num_turns += 1
+            pieces = state_t[:, :2].sum(axis=(2, 3))
+            if num_turns > 2: done = ~pieces.all(axis=1)
+            reward = np.where(pieces[:, 0] > 0, 1, -1) if np.all(done) else None
+            return state_t[~done].copy(), reward, done
+
+        state, reward, done = step(state.copy(), action, 0)
+        player_idx = 1
+        while np.any(~done):
+            if player_idx == 1:
+                state[:, [0, 1]] = state[:, [1, 0]]
+            _, action = Agent.choose_action(self.model, state)
+            state, reward, done = step(state.copy(), action, player_idx)
+            player_idx = 1 - player_idx
+        return reward

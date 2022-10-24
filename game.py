@@ -14,7 +14,7 @@ class Env:
         self.num_envs = num_envs
         self.state = np.zeros((self.num_envs, 2, 6, 6), dtype=int)
         self.done = np.full(len(self.state), False)
-        self.turns = 0
+        self.num_turns = 0
         self.mode = 'train'
 
         if self.graphics:
@@ -47,15 +47,15 @@ class Env:
     def reset(self):
         self.state = np.zeros((self.num_envs, 2, 6, 6), dtype=int)
         self.done = np.full(len(self.state), False)
-        self.turns = 0
-        return self.state.copy(), np.full(self.num_envs, False), None
+        self.num_turns = 0
+        return self.state.copy(), None, np.full(self.num_envs, False)
 
     def step(self, state, action, player_idx):
         state = update_game_state(state, action)
         self.state[~self.done] = state if player_idx == 0 else state[:, [1, 0]]
-        self.turns += 1
+        self.num_turns += 1
         pieces = self.state[:, :2].sum(axis=(2, 3))
-        if self.turns > 2: self.done = ~pieces.all(axis=1)
+        if self.num_turns > 2: self.done = ~pieces.all(axis=1)
         reward = np.where(pieces[:, 0] > 0, 1, -1) if np.all(self.done) else None
         return self.state[~self.done].copy(), reward, self.done
 

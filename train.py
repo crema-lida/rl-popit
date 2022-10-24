@@ -2,10 +2,9 @@ import numpy as np
 import torch
 import torch.nn.functional as f
 from torch.nn.utils import clip_grad_norm_
-from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
 import os, time
-from tqdm import tqdm, trange
+from tqdm import tqdm
 
 import network
 from game import Env
@@ -13,18 +12,16 @@ from agent import Agent
 import utils
 
 
-def train_with_ppo(epochs=20000, ep_start=0, sample_loops=10, max_saved_models=10, drop_threshold=85):
-    last_saved = 0
+def train_with_ppo(epochs=20000, ep_start=0, sample_loops=10, drop_threshold=85):
+    ema_win_rate = {}
     with tqdm(total=epochs, ncols=80, desc='Progress') as tbar_main:
         tbar_main.update(ep_start)
         for ep in range(ep_start, epochs):
-            tbar_main.update(1)
             tbar_main.set_postfix_str(f'lr={agent.scheduler.get_last_lr()[0]:.2e}')
+            tbar_main.update(1)
             tqdm.write(f'Epoch {ep}'.center(45) + '\n' + 'Opponent     Win Rate (%)'.center(45))
-            if ep % 100 == 0 and len(os.listdir(f'{MODEL_DIR}/opp')) < max_saved_models:
-                model_path = f'{MODEL_DIR}/opp/model-{ep}'
-                torch.save(agent.model.state_dict(), model_path)
-                last_saved = ep
+            if ep <= 1000 and ep % 100 == 0 or ep > 1000 and ep % 1000 == 0:
+                agent.save_as_opponent(MODEL_DIR, ep)
 
             # sample (loops * batch_size) games by playing with older models
             agent.model.eval()
@@ -37,17 +34,17 @@ def train_with_ppo(epochs=20000, ep_start=0, sample_loops=10, max_saved_models=1
                     for first_move in range(2):
                         tbar.update(1)
                         player_idx = first_move
-                        state, done, reward = env.reset()
+                        state, reward, done = env.reset()
                         while np.any(~done):
                             if player_idx == 1:
                                 state[:, [0, 1]] = state[:, [1, 0]]
-                            policy, action = Agent.select_action(cnn[player_idx], state)
+                            policy, action = Agent.choose_action(cnn[player_idx], state)
                             state_new, reward, done_new = env.step(state.copy(), action, player_idx)
 
                             if player_idx == 0:
                                 agent.remember(state, policy, action, done)
                             elif env.graphics:
-                                policy, _ = Agent.select_action(agent.model, state_new)
+                                policy, _ = Agent.choose_action(agent.model, state_new)
                                 env.paint_canvas(policy)
 
                             state, done = state_new, done_new
@@ -58,29 +55,30 @@ def train_with_ppo(epochs=20000, ep_start=0, sample_loops=10, max_saved_models=1
                         wins += 0.5 * (reward.sum() + env.num_envs)
 
                     win_rate = wins / (2 * env.num_envs) * 100
-                    writer.add_scalars('win_rate', {model_name: win_rate}, ep)
+                    if model_name not in ema_win_rate:
+                        ema_win_rate[model_name] = win_rate
+                    else:
+                        ema_win_rate[model_name] = ema_win_rate[model_name] * 0.9 + win_rate * 0.1
                     tqdm.write(f'{model_name}     {win_rate: .2f}'.center(40))
-                    if win_rate > drop_threshold or ep - last_saved > 500:
+                    if ema_win_rate[model_name] > drop_threshold:
                         # remove the old model, and save the latest for opponent to use
                         os.remove(f'{MODEL_DIR}/opp/{model_name}')
-                        model_path = f'{MODEL_DIR}/opp/model-{ep}'
-                        torch.save(agent.model.state_dict(), model_path)
-                        tqdm.write(f'New model state saved to {model_path}')
-                        last_saved = ep
+                        agent.save_as_opponent(MODEL_DIR, ep)
 
             agent.model.train()
             info = agent.learn()
-            agent.scheduler.step(ep)
+            agent.scheduler.step()
+            writer.add_scalars('win_rate', ema_win_rate, ep)
             for tag, data in info.items():
-                writer.add_histogram(tag, torch.concat(data), ep)
-            agent.save_checkpoint(ep, MODEL_DIR)
+                writer.add_histogram(f'metrics/{tag}', torch.concat(data), ep)
+            agent.save_checkpoint(MODEL_DIR, ep)
 
 
 def train_with_mcts(epochs=10000):
     cross_entropy = torch.nn.CrossEntropyLoss()
     start = time.time()
     for ep in range(epochs + 1):
-        opponent.load_state_dict(agent.state_dict())
+        opponent.load_state_dict(agent.model.state_dict())
         wins = 0
 
         for first_move in range(2):
@@ -104,7 +102,7 @@ def train_with_mcts(epochs=10000):
                     action = np.full(env.num_envs, -1)  # (N,)
                     mask = _mask[idx].cpu()
 
-                    turns = env.turns
+                    turns = env.num_turns
 
                     for i in range(240):
                         q = action_value / (1e-5 + n)  # (n, 36)
@@ -131,7 +129,7 @@ def train_with_mcts(epochs=10000):
                         n_value[sel] = n[:len_sel]
                         env.render_text(p_value, q_value, n_value)
                         env.render(env.state[:4])
-                        env.turns = turns
+                        env.num_turns = turns
 
                     n = from_numpy(augment_data(n.reshape((-1, 1, 6, 6))).reshape((-1, 36)), device)
                     target_p = f.softmax(n, dim=1)
@@ -171,24 +169,6 @@ def train_with_mcts(epochs=10000):
         torch.save(agent.state_dict(), f'{MODEL_DIR}/agent')
 
 
-def rollout(state, action):
-    state, done, rewards = env.step(state, action)
-    player = 1
-    while np.any(~done):
-        state[:, [0, 1]] = state[:, [1, 0]]
-        _state = utils.from_numpy(state[~done])
-        mask = _state[:, 1].reshape(-1, 36) != 0
-        _state = _state - torch.mean(_state, dim=(2, 3), keepdim=True)  # zero-center
-        out = cnn[player](_state)
-        policy = cnn[player].policy_head(out, mask).detach().cpu()
-        action = np.full(env.num_envs, -1)
-        action[~done] = Categorical(policy).sample()
-
-        state, done, rewards = env.step(state, action)
-        player = 1 - player
-    return rewards if player == 1 else -rewards
-
-
 def play_with_mcts():
     assert env.graphics, 'Interactive mode requires graphics=True.'
     utils.device = torch.device('cpu')
@@ -197,81 +177,57 @@ def play_with_mcts():
         nn.to(utils.device)
     env.num_envs = 1
     env.mode = 'interactive'
-    player = np.random.randint(2)
-    state, done, rewards = env.reset()
+    agent.model.eval()
+    player_idx = np.random.randint(2)
+    state, reward, done = env.reset()
     while np.any(~done):
-        state[:, [0, 1]] = state[:, [1, 0]]
-
-        if player == 0:
-            idx = np.arange(len(state[~done]))
-            _state = utils.from_numpy(utils.augment_data(state[~done]))  # (n, 2, 6, 6)
-            _mask = _state[:, 1].reshape(-1, 36) != 0
-            _state = _state - torch.mean(_state, dim=(2, 3), keepdim=True)  # zero-center
-            out = cnn[player](_state)
-            _policy = cnn[player].policy_head(out, _mask)  # (n, 36)
-            policy = _policy[idx].detach().cpu().numpy()
-            policy[_mask[idx].cpu().numpy()] = -np.inf
-
-            action_value = np.zeros_like(policy)  # (n, 36)
-            n = np.zeros_like(policy)  # (n, 36)
-            action = np.full(env.num_envs, -1)  # (N,)
-            mask = _mask[idx].cpu()
-
-            turns = env.turns
+        if player_idx == 1:
+            state[0, [0, 1]] = state[0, [1, 0]]
+            action = env.wait()
+        else:
+            policy, _ = agent.choose_action(agent.model, state)
+            mask = state[0, 1].reshape(-1, 36) != 0
+            policy[mask] = -np.inf
+            action_value = np.zeros_like(policy)  # (1, 36)
+            n = np.zeros_like(policy)  # (1, 36)
 
             for i in range(180):
-                q = action_value / (1e-5 + n)  # (n, 36)
-                score = q + 10 * policy / (n + 1)  # (n, 36)
+                q = action_value / (1e-5 + n)  # (1, 36)
+                score = q + 10 * policy / (n + 1)  # (1, 36)
                 selection = i if i < 36 else np.argmax(score, axis=1)
-                action[~done] = selection
-                action_value[idx, selection] += rollout(state.copy(), action)[~done]
-                n[idx, selection] += 1
+                action_value[0, selection] += agent.rollout(state.copy(), selection, env.num_turns)
+                n[0, selection] += 1
                 if i < 36:
                     action_value[mask] = 0
                     n[mask] = 0
-
-                num = min(env.num_envs, 4)
-                cmap, p_value, q_value, n_value = [np.zeros((num, 36)) for _ in range(4)]
-                sel = ~done[:4]
-                len_sel = len(np.where(sel)[0])
-                exp_cmap = np.exp(score[:len_sel])
-                _cmap = exp_cmap / np.sum(exp_cmap, axis=1, keepdims=True)
-                cmap[sel] = _cmap / np.max(_cmap, axis=1, keepdims=True)
+                exp_cmap = np.exp(score)
+                cmap = exp_cmap / exp_cmap.sum()
                 env.paint_canvas(cmap)
+                env.render_text(policy, q, n)
+                env.render()
+            action = np.argmax(n, axis=-1)
 
-                p_value[sel] = policy[:len_sel]
-                q_value[sel] = q[:len_sel]
-                n_value[sel] = n[:len_sel]
-                env.render_text(p_value, q_value, n_value)
-                env.render(env.state[:4])
-                env.turns = turns
-
-            n = utils.from_numpy(utils.augment_data(n.reshape((-1, 1, 6, 6))).reshape((-1, 36)))
-            action[~done] = np.argmax(n[0])
-        else:
-            action = env.wait()
-
-        state, done, rewards = env.step(env.state, action)
-        if player == 0:
-            env.render(env.state[:4])
-        else:
-            env.render(env.state[:4, [1, 0]])
-        player = 1 - player
+        state, reward, done = env.step(state.copy(), action, player_idx)
+        env.render()
+        player_idx = 1 - player_idx
 
 
 if __name__ == '__main__':
     # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
     MODEL_DIR = 'resnet3'
-    SUMMARY_DIR = 'runs/' + time.asctime().replace(' ', '-')  # '/tf_logs'
+    SUMMARY_DIR = 'runs/' + time.asctime().replace(' ', '-').replace(':', '.')
+    # SUMMARY_DIR = '/tf_logs'
     # os.system('rm -rf /tf_logs/*')
     writer = SummaryWriter(SUMMARY_DIR)
+    utils.device = torch.device('cuda')
+    epochs = 20000
 
     env = Env(graphics=False, fps=3, num_envs=64)
-    utils.device = torch.device('cuda')
     in_features = env.state.shape[1]
     agent = Agent(network.ResNet(in_features, num_blocks=3).to(utils.device),
                   minibatch_size=2048, clip=0.1, entropy_coeff=0.01, max_norm=0.5,
-                  lr=1e-3, weight_decay=1e-4, eps=1e-5)
+                  lr=5e-4, weight_decay=1e-4, eps=1e-5,
+                  t_max=epochs, min_lr=5e-6)
     opponent = network.ResNet(in_features, num_blocks=3).to(utils.device).eval()
     cnn = [agent.model, opponent]
 
@@ -281,13 +237,13 @@ if __name__ == '__main__':
         agent.model.load_state_dict(checkpoint['model'])
         agent.policy_optim.load_state_dict(checkpoint['policy_optim'])
         agent.value_optim.load_state_dict(checkpoint['value_optim'])
+        agent.scheduler.load_state_dict(checkpoint['scheduler'])
         ep = checkpoint['epoch']
     else:
         ep = 0
 
-    train_with_ppo(epochs=20000, ep_start=ep, sample_loops=20,
-                   max_saved_models=10, drop_threshold=85)
-    # train_with_mcts()
+    train_with_ppo(epochs=epochs, ep_start=ep, sample_loops=20, drop_threshold=85)
     # play_with_mcts()
+    # train_with_mcts()
 
     env.close()
