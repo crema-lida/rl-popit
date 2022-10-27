@@ -94,7 +94,7 @@ class ValueHead(nn.Module):
 
 if __name__ == '__main__':
     resnet = ResNet()
-    resnet.load_state_dict(torch.load('resnet3/agent'))
+    resnet.load_state_dict(torch.load('resnet3/checkpoint')['model'])
     # for name, param in resnet.named_parameters():
     #     print(name, param.shape, param)
     print(resnet.state_dict())

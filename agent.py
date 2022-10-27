@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+import torch.nn.functional as f
 from torch.distributions.categorical import Categorical
 from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import TensorDataset, DataLoader
@@ -33,7 +34,7 @@ class Agent:
                                                {'params': params['bias'], 'weight_decay': 0}],
                                               lr=lr, eps=eps)
         self.value_optim = torch.optim.NAdam(self.value_head.parameters(),
-                                             lr=lr, weight_decay=weight_decay)
+                                             lr=2e-3, weight_decay=weight_decay)
         self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.policy_optim,
                                                                     T_max=t_max, eta_min=min_lr)
 
@@ -55,14 +56,17 @@ class Agent:
         tqdm.write(f'New model state saved to {model_path}')
 
     @staticmethod
-    def choose_action(model, state):
-        mask = torch.from_numpy(state[:, 1].reshape(-1, 36) != 0).to(device=utils.device, non_blocking=True)
-        state = utils.zero_center(state)
-        _state = torch.from_numpy(state.astype(np.single)).to(device=utils.device)  # (n, 2, 6, 6)
+    def choose_action(model, state, return_state_value=False):
         with torch.no_grad():
+            mask = torch.from_numpy(state[:, 1].reshape(-1, 36) != 0).to(device=utils.device, non_blocking=True)
+            state = utils.zero_center(state)
+            _state = torch.from_numpy(state.astype(np.float32)).to(device=utils.device)  # (n, 2, 6, 6)
             out = model(_state)
             policy = model.policy_head(out, mask).cpu()  # (n, 36)
-        return policy.numpy(), Categorical(policy).sample().numpy()
+            if return_state_value:
+                return model.value_head(out).squeeze(1).cpu().numpy(), Categorical(policy).sample().numpy()
+            else:
+                return policy.numpy(), Categorical(policy).sample().numpy()
 
     def remember(self, state, policy, action, done):
         self.dataset['s'].append(state)
@@ -78,7 +82,7 @@ class Agent:
     def gather_data(self):
         raw_data = [np.concatenate(data, axis=0) for data in self.dataset.values()]  # [state, policy, action, reward]
         raw_data.append(raw_data[0][:, 1].reshape(-1, 36) != 0)  # create masks for softmax
-        raw_data[0] = utils.zero_center(raw_data[0].astype(np.single))  # zero-center states
+        raw_data[0] = utils.zero_center(raw_data[0].astype(np.float32))  # zero-center states
         raw_data[2] = utils.to_mask(raw_data[2])  # convert actions (n,) to masks (n, 36)
         return map(torch.from_numpy, raw_data)
 
@@ -94,7 +98,7 @@ class Agent:
         )
         for data in self.dataset.values():
             data.clear()
-        info = {'pi': [], 'entropy': [], 'pi_ratio': [], 'total_norm': []}
+        info = {'value_loss': [], 'pi': [], 'entropy': [], 'pi_ratio': [], 'total_norm': []}
 
         with tqdm(total=len(batch), ncols=80, leave=False, desc='Updating policy') as tbar:
             for dataset in batch:
@@ -103,22 +107,27 @@ class Agent:
                                                           dataset)
                 out = self.model(state)
                 policy = self.policy_head(out, mask)
+                state_value = self.value_head(out.detach()).squeeze(1)
+                adv = reward - state_value.detach()
+                adv = (adv - adv.mean()) / (adv.std() + 1e-5)
                 pi_ratio = policy[action] / old_pi[action]  # (n,)
-                obj = torch.min(pi_ratio * reward, pi_ratio.clip(1 - self.clip, 1 + self.clip) * reward)
+                obj = torch.min(pi_ratio * adv, pi_ratio.clip(1 - self.clip, 1 + self.clip) * adv)
                 entropy = self.entropy_coeff * Categorical(policy).entropy()
-                loss = -torch.mean(obj + entropy)
+
+                value_loss = f.mse_loss(state_value, reward)
+                loss = -torch.mean(obj + entropy) + value_loss
                 loss.backward()
                 total_norm = clip_grad_norm_(self.model.parameters(), max_norm=self.max_norm, error_if_nonfinite=True)
 
+                info['value_loss'].append(value_loss.detach().unsqueeze(0))
                 info['entropy'].append(entropy.detach())
                 info['total_norm'].append(total_norm.unsqueeze(0))
                 info['pi'].append(old_pi[action].detach())
                 info['pi_ratio'].append(pi_ratio.detach())
-                # for stage in self.policy_network:
-                #     for name, param in stage.named_parameters():
-                #         print(name, param.grad)
                 self.policy_optim.step()
                 self.policy_optim.zero_grad()
+                self.value_optim.step()
+                self.value_optim.zero_grad()
         return info
 
     def rollout(self, state, action, num_turns):
@@ -132,15 +141,23 @@ class Agent:
             num_turns += 1
             pieces = state_t[:, :2].sum(axis=(2, 3))
             if num_turns > 2: done = ~pieces.all(axis=1)
-            reward = np.where(pieces[:, 0] > 0, 1, -1) if np.all(done) else None
+            reward = np.where(pieces[:, 0] > 0, 1, -1).astype(np.float32) if np.all(done) else None
             return state_t[~done].copy(), reward, done
 
         state, reward, done = step(state.copy(), action, 0)
+        state_value = None
+        sel = None
         player_idx = 1
         while np.any(~done):
             if player_idx == 1:
                 state[:, [0, 1]] = state[:, [1, 0]]
-            _, action = Agent.choose_action(self.model, state)
+            if state_value is None and player_idx == 0:
+                state_value, action = Agent.choose_action(self.model, state, return_state_value=True)
+                sel = ~done.copy()
+            else:
+                _, action = Agent.choose_action(self.model, state)
             state, reward, done = step(state.copy(), action, player_idx)
             player_idx = 1 - player_idx
+        if state_value is not None:
+            reward[sel] = (state_value + reward[sel]) / 2
         return reward

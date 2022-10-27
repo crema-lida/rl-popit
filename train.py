@@ -20,7 +20,8 @@ def train_with_ppo(epochs=20000, ep_start=0, sample_loops=10, drop_threshold=85)
             tbar_main.set_postfix_str(f'lr={agent.scheduler.get_last_lr()[0]:.2e}')
             tbar_main.update(1)
             tqdm.write(f'Epoch {ep}'.center(45) + '\n' + 'Opponent     Win Rate (%)'.center(45))
-            if ep <= 1000 and ep % 100 == 0 or ep > 1000 and ep % 1000 == 0:
+            if (ep <= 1000 and ep % 100 == 0 or ep > 1000 and ep % 500 == 0) and \
+                    np.all(np.array(list(ema_win_rate.values())) > 55):
                 agent.save_as_opponent(MODEL_DIR, ep)
 
             # sample (loops * batch_size) games by playing with older models
@@ -30,6 +31,7 @@ def train_with_ppo(epochs=20000, ep_start=0, sample_loops=10, drop_threshold=85)
                     dirlist = os.listdir(f'{MODEL_DIR}/opp')
                     model_name = np.random.choice(dirlist)  # randomly select a model from history
                     opponent.load_state_dict(torch.load(f'{MODEL_DIR}/opp/{model_name}'))
+                    # opponent.load_state_dict(torch.load('resnet3/checkpoint')['model'])
                     wins = 0
                     for first_move in range(2):
                         tbar.update(1)
@@ -64,13 +66,17 @@ def train_with_ppo(epochs=20000, ep_start=0, sample_loops=10, drop_threshold=85)
                         # remove the old model, and save the latest for opponent to use
                         os.remove(f'{MODEL_DIR}/opp/{model_name}')
                         agent.save_as_opponent(MODEL_DIR, ep)
+                        del ema_win_rate[model_name]
 
             agent.model.train()
             info = agent.learn()
             agent.scheduler.step()
-            writer.add_scalars('win_rate', ema_win_rate, ep)
             for tag, data in info.items():
-                writer.add_histogram(f'metrics/{tag}', torch.concat(data), ep)
+                if tag == 'value_loss':
+                    writer.add_scalar(tag, torch.concat(data).mean(), ep)
+                else:
+                    writer.add_histogram(f'metrics/{tag}', torch.concat(data), ep)
+            writer.add_scalars('win_rate', ema_win_rate, ep)
             agent.save_checkpoint(MODEL_DIR, ep)
 
 
@@ -169,7 +175,7 @@ def train_with_mcts(epochs=10000):
         torch.save(agent.state_dict(), f'{MODEL_DIR}/agent')
 
 
-def play_with_mcts():
+def play_with_mcts(policy_only=False, max_searches=180, policy_weight=1.0):
     assert env.graphics, 'Interactive mode requires graphics=True.'
     utils.device = torch.device('cpu')
     for nn in cnn:
@@ -186,29 +192,29 @@ def play_with_mcts():
             action = env.wait()
         else:
             policy, _ = agent.choose_action(agent.model, state)
-            mask = state[0, 1].reshape(-1, 36) != 0
-            policy[mask] = -np.inf
-            action_value = np.zeros_like(policy)  # (1, 36)
-            n = np.zeros_like(policy)  # (1, 36)
-
-            for i in range(180):
-                q = action_value / (1e-5 + n)  # (1, 36)
-                score = q + 10 * policy / (n + 1)  # (1, 36)
-                selection = i if i < 36 else np.argmax(score, axis=1)
-                action_value[0, selection] += agent.rollout(state.copy(), selection, env.num_turns)
-                n[0, selection] += 1
-                if i < 36:
-                    action_value[mask] = 0
-                    n[mask] = 0
-                exp_cmap = np.exp(score)
-                cmap = exp_cmap / exp_cmap.sum()
-                env.paint_canvas(cmap)
-                env.render_text(policy, q, n)
-                env.render()
+            if policy_only:
+                n = policy
+                env.paint_canvas(policy)
+            else:
+                mask = state[0, 1].reshape(-1, 36) != 0
+                policy[mask] = -np.inf
+                q = np.zeros_like(policy)  # (1, 36) the action value
+                n = np.zeros_like(policy)  # (1, 36)
+                for i in range(max_searches):
+                    score = q + policy_weight * policy / (n + 1)  # (1, 36)
+                    sel = np.argmax(score, axis=1)
+                    q[0, sel] = 0.9 * q[0, sel] + 0.1 * agent.rollout(state.copy(), sel, env.num_turns)
+                    n[0, sel] += 1
+                    exp_cmap = np.exp(score)
+                    cmap = exp_cmap / exp_cmap.sum()
+                    env.paint_canvas(cmap)
+                    env.render_text(policy, q, n)
+                    env.render()
             action = np.argmax(n, axis=-1)
 
         state, reward, done = env.step(state.copy(), action, player_idx)
         env.render()
+        if np.all(done): time.sleep(1)
         player_idx = 1 - player_idx
 
 
@@ -220,14 +226,13 @@ if __name__ == '__main__':
     # os.system('rm -rf /tf_logs/*')
     writer = SummaryWriter(SUMMARY_DIR)
     utils.device = torch.device('cuda')
-    epochs = 20000
 
-    env = Env(graphics=False, fps=3, num_envs=64)
+    env = Env(graphics=True, fps=3, num_envs=64)
     in_features = env.state.shape[1]
     agent = Agent(network.ResNet(in_features, num_blocks=3).to(utils.device),
                   minibatch_size=2048, clip=0.1, entropy_coeff=0.01, max_norm=0.5,
                   lr=5e-4, weight_decay=1e-4, eps=1e-5,
-                  t_max=epochs, min_lr=5e-6)
+                  t_max=10000, min_lr=5e-6)
     opponent = network.ResNet(in_features, num_blocks=3).to(utils.device).eval()
     cnn = [agent.model, opponent]
 
@@ -242,8 +247,8 @@ if __name__ == '__main__':
     else:
         ep = 0
 
-    train_with_ppo(epochs=epochs, ep_start=ep, sample_loops=20, drop_threshold=85)
-    # play_with_mcts()
+    # train_with_ppo(epochs=20000, ep_start=ep, sample_loops=20, drop_threshold=85)
+    play_with_mcts(policy_only=True, max_searches=180, policy_weight=1.0)
     # train_with_mcts()
 
     env.close()

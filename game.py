@@ -56,7 +56,7 @@ class Env:
         self.num_turns += 1
         pieces = self.state[:, :2].sum(axis=(2, 3))
         if self.num_turns > 2: self.done = ~pieces.all(axis=1)
-        reward = np.where(pieces[:, 0] > 0, 1, -1) if np.all(self.done) else None
+        reward = np.where(pieces[:, 0] > 0, 1, -1).astype(np.float32) if np.all(self.done) else None
         return self.state[~self.done].copy(), reward, self.done
 
     def render(self):
