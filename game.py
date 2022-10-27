@@ -23,7 +23,7 @@ class Env:
             pg.init()
             pg.display.init()
             pg.display.set_caption('Pop it!')
-            screen_size = np.array([1440, 1440])
+            screen_size = np.array([1440, 1440]) / 2
             self.window = pg.display.set_mode(screen_size)
             self.screen = pg.Surface(screen_size, pg.SRCALPHA)
 
@@ -79,7 +79,7 @@ class Env:
         self.screen.blit(self.grid, (0, 0))
         size = np.array(self.window.get_rect().size)
         if self.mode == 'interactive':
-            size *= 2
+            size *= 1
         self.window.blit(pg.transform.scale(self.screen, size), (0, 0))
         pg.event.pump()
         pg.display.update()
@@ -121,7 +121,7 @@ class Env:
         while True:
             for event in pg.event.get():
                 if event.type == pg.MOUSEBUTTONDOWN:
-                    action = event.pos[1] // 240 * 6 + event.pos[0] // 240
+                    action = event.pos[1] // 120 * 6 + event.pos[0] // 120
                     return np.array([action])
 
     def close(self):

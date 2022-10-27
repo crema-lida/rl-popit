@@ -4,11 +4,10 @@ import torch.nn.functional as f
 
 
 class CNN(nn.Module):
-    def __init__(self, in_features=2, num_blocks=2):
+    def __init__(self, features=64, num_blocks=2):
         super(CNN, self).__init__()
-        features = 64
         self.conv_block = nn.Sequential(
-            nn.Conv2d(in_features, features, 3, padding=1),
+            nn.Conv2d(2, features, 3, padding=1),
             nn.BatchNorm2d(features),
             nn.Tanh(),
         )
@@ -36,9 +35,8 @@ class CNN(nn.Module):
 
 
 class ResNet(CNN):
-    def __init__(self, in_features=2, num_blocks=3):
-        super(ResNet, self).__init__(in_features)
-        features = 64
+    def __init__(self, features=64, num_blocks=3):
+        super(ResNet, self).__init__(features)
         self.middle_layers = nn.ModuleList(
             [
                 nn.Sequential(

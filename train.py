@@ -192,7 +192,7 @@ def play_with_mcts(policy_only=False, max_searches=180, policy_weight=1.0):
             action = env.wait()
         else:
             policy, _ = agent.choose_action(agent.model, state)
-            if policy_only:
+            if policy_only or env.num_turns < 30:
                 n = policy
                 env.paint_canvas(policy)
             else:
@@ -220,20 +220,19 @@ def play_with_mcts(policy_only=False, max_searches=180, policy_weight=1.0):
 
 if __name__ == '__main__':
     # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
-    MODEL_DIR = 'resnet3'
+    MODEL_DIR = 'conv2'
     SUMMARY_DIR = 'runs/' + time.asctime().replace(' ', '-').replace(':', '.')
     # SUMMARY_DIR = '/tf_logs'
     # os.system('rm -rf /tf_logs/*')
     writer = SummaryWriter(SUMMARY_DIR)
     utils.device = torch.device('cuda')
 
-    env = Env(graphics=True, fps=3, num_envs=64)
-    in_features = env.state.shape[1]
-    agent = Agent(network.ResNet(in_features, num_blocks=3).to(utils.device),
+    env = Env(graphics=False, fps=3, num_envs=64)
+    agent = Agent(network.CNN(features=64, num_blocks=2).to(utils.device),
                   minibatch_size=2048, clip=0.1, entropy_coeff=0.01, max_norm=0.5,
                   lr=5e-4, weight_decay=1e-4, eps=1e-5,
                   t_max=10000, min_lr=5e-6)
-    opponent = network.ResNet(in_features, num_blocks=3).to(utils.device).eval()
+    opponent = network.CNN(features=64, num_blocks=2).to(utils.device).eval()
     cnn = [agent.model, opponent]
 
     os.makedirs(f'{MODEL_DIR}/opp', exist_ok=True)
@@ -247,8 +246,8 @@ if __name__ == '__main__':
     else:
         ep = 0
 
-    # train_with_ppo(epochs=20000, ep_start=ep, sample_loops=20, drop_threshold=85)
-    play_with_mcts(policy_only=True, max_searches=180, policy_weight=1.0)
+    train_with_ppo(epochs=10000, ep_start=ep, sample_loops=20, drop_threshold=85)
+    # play_with_mcts(policy_only=False, max_searches=180, policy_weight=1.0)
     # train_with_mcts()
 
     env.close()
