@@ -91,8 +91,22 @@ class ValueHead(nn.Module):
 
 
 if __name__ == '__main__':
-    resnet = ResNet()
-    resnet.load_state_dict(torch.load('resnet3/checkpoint')['model'])
-    # for name, param in resnet.named_parameters():
-    #     print(name, param.shape, param)
-    print(resnet.state_dict())
+    import onnx
+    from onnx_tf.backend import prepare
+    # import tensorflow as tf
+
+    with torch.no_grad():
+        resnet = ResNet().eval()
+        resnet.load_state_dict(torch.load('resnet3/checkpoint')['model'])
+        inp = torch.zeros(1, 2, 6, 6, dtype=torch.float32)
+        out = resnet(inp)
+        mask = inp[:, 1].reshape(-1, 36) != 0
+        mask[0, [2, 5, 35]] = True
+
+        # torch.onnx.export(resnet.policy_head, out, 'resnet3_policy_head.onnx')
+
+        model = onnx.load("resnet3_policy_head.onnx")
+        tf_model = prepare(model)
+        # tf_model.export_graph('tf_resnet3_policy_head')
+        print(resnet.policy_head(out, mask))
+        # print(tf_model.run(out))

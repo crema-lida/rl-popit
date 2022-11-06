@@ -12,8 +12,7 @@ from agent import Agent
 import utils
 
 
-def train_with_ppo(epochs=20000, ep_start=0, sample_loops=10, drop_threshold=85):
-    ema_win_rate = {}
+def train_with_ppo(epochs=20000, sample_loops=10, drop_threshold=85):
     with tqdm(total=epochs, ncols=80, desc='Progress') as tbar_main:
         tbar_main.update(ep_start)
         for ep in range(ep_start, epochs):
@@ -32,6 +31,7 @@ def train_with_ppo(epochs=20000, ep_start=0, sample_loops=10, drop_threshold=85)
                     model_name = np.random.choice(dirlist)  # randomly select a model from history
                     opponent.load_state_dict(torch.load(f'{MODEL_DIR}/opp/{model_name}'))
                     # opponent.load_state_dict(torch.load('resnet3/checkpoint')['model'])
+                    # model_name = 'resnet3-64'
                     wins = 0
                     for first_move in range(2):
                         tbar.update(1)
@@ -75,9 +75,9 @@ def train_with_ppo(epochs=20000, ep_start=0, sample_loops=10, drop_threshold=85)
                 if tag == 'value_loss':
                     writer.add_scalar(tag, torch.concat(data).mean(), ep)
                 else:
-                    writer.add_histogram(f'metrics/{tag}', torch.concat(data), ep)
+                    writer.add_histogram(f'histogram/{tag}', torch.concat(data), ep)
             writer.add_scalars('win_rate', ema_win_rate, ep)
-            agent.save_checkpoint(MODEL_DIR, ep)
+            agent.save_checkpoint(MODEL_DIR, ep, ema_win_rate)
 
 
 def train_with_mcts(epochs=10000):
@@ -220,7 +220,7 @@ def play_with_mcts(policy_only=False, max_searches=180, policy_weight=1.0):
 
 if __name__ == '__main__':
     # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
-    MODEL_DIR = 'conv2'
+    MODEL_DIR = 'resnet3-64'
     SUMMARY_DIR = 'runs/' + time.asctime().replace(' ', '-').replace(':', '.')
     # SUMMARY_DIR = '/tf_logs'
     # os.system('rm -rf /tf_logs/*')
@@ -228,11 +228,11 @@ if __name__ == '__main__':
     utils.device = torch.device('cuda')
 
     env = Env(graphics=False, fps=3, num_envs=64)
-    agent = Agent(network.CNN(features=64, num_blocks=2).to(utils.device),
+    agent = Agent(network.ResNet(features=64, num_blocks=3).to(utils.device),
                   minibatch_size=2048, clip=0.1, entropy_coeff=0.01, max_norm=0.5,
-                  lr=5e-4, weight_decay=1e-4, eps=1e-5,
+                  lr=2e-3, weight_decay=1e-4, eps=1e-5,
                   t_max=10000, min_lr=5e-6)
-    opponent = network.CNN(features=64, num_blocks=2).to(utils.device).eval()
+    opponent = network.ResNet(features=64, num_blocks=3).to(utils.device).eval()
     cnn = [agent.model, opponent]
 
     os.makedirs(f'{MODEL_DIR}/opp', exist_ok=True)
@@ -241,12 +241,14 @@ if __name__ == '__main__':
         agent.model.load_state_dict(checkpoint['model'])
         agent.policy_optim.load_state_dict(checkpoint['policy_optim'])
         agent.value_optim.load_state_dict(checkpoint['value_optim'])
-        agent.scheduler.load_state_dict(checkpoint['scheduler'])
-        ep = checkpoint['epoch']
+        ep_start = checkpoint['epoch']
+        if ep_start < 10000: agent.scheduler.load_state_dict(checkpoint['scheduler'])
+        ema_win_rate = checkpoint['win_rate_dict']
     else:
-        ep = 0
+        ep_start = 0
+        ema_win_rate = {}
 
-    train_with_ppo(epochs=10000, ep_start=ep, sample_loops=20, drop_threshold=85)
+    train_with_ppo(epochs=20000, sample_loops=20, drop_threshold=85)
     # play_with_mcts(policy_only=False, max_searches=180, policy_weight=1.0)
     # train_with_mcts()
 

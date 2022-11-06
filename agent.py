@@ -41,9 +41,10 @@ class Agent:
         self.dataset = {'s': [], 'p': [], 'a': [], 'r': []}
         self.history_done = []
 
-    def save_checkpoint(self, model_dir, ep):
+    def save_checkpoint(self, model_dir, ep, win_rate_dict):
         torch.save({
             'epoch': ep,
+            'win_rate_dict': win_rate_dict,
             'model': self.model.state_dict(),
             'policy_optim': self.policy_optim.state_dict(),
             'value_optim': self.value_optim.state_dict(),
@@ -144,7 +145,7 @@ class Agent:
             reward = np.where(pieces[:, 0] > 0, 1, -1).astype(np.float32) if np.all(done) else None
             return state_t[~done].copy(), reward, done
 
-        state, reward, done = step(state.copy(), action, 0)
+        state, reward, done = step(state, action, 0)
         state_value = None
         sel = None
         player_idx = 1
@@ -156,7 +157,7 @@ class Agent:
                 sel = ~done.copy()
             else:
                 _, action = Agent.choose_action(self.model, state)
-            state, reward, done = step(state.copy(), action, player_idx)
+            state, reward, done = step(state, action, player_idx)
             player_idx = 1 - player_idx
         if state_value is not None:
             reward[sel] = (state_value + reward[sel]) / 2
