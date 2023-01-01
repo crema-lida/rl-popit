@@ -4,16 +4,16 @@ import torch.nn.functional as f
 from torch.distributions.categorical import Categorical
 from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import TensorDataset, DataLoader
-from tqdm import tqdm
+from tqdm.autonotebook import tqdm
 
 import utils
+from globals import glob
 
 
 class Agent:
     def __init__(self, model, minibatch_size=1024,
                  clip=0.2, entropy_coeff=0.01, max_norm=0.5,
-                 lr=2e-3, weight_decay=1e-4, eps=1e-5,
-                 t_max=20000, min_lr=1e-5):
+                 lr=1e-3, weight_decay=1e-4, eps=1e-5):
         self.minibatch_size = minibatch_size
         self.clip = clip
         self.entropy_coeff = entropy_coeff
@@ -24,22 +24,37 @@ class Agent:
         self.policy_head = self.model.policy_head
         self.value_head = self.model.value_head
         params = {'weight': [], 'bias': []}
-        for stage in self.policy_network:
-            for name, param in stage.named_parameters():
+        for module in self.policy_network:
+            for name, param in module.named_parameters():
                 if 'bias' in name:
                     params['bias'].append(param)
                 else:
                     params['weight'].append(param)
-        self.policy_optim = torch.optim.NAdam([{'params': params['weight'], 'weight_decay': weight_decay},
+        self.policy_optim = torch.optim.AdamW([{'params': params['weight'], 'weight_decay': weight_decay},
                                                {'params': params['bias'], 'weight_decay': 0}],
                                               lr=lr, eps=eps)
-        self.value_optim = torch.optim.NAdam(self.value_head.parameters(),
-                                             lr=2e-3, weight_decay=weight_decay)
-        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.policy_optim,
-                                                                    T_max=t_max, eta_min=min_lr)
+        self.value_optim = torch.optim.AdamW(self.value_head.parameters(),
+                                             lr=lr, weight_decay=weight_decay)
+        self.scheduler = torch.optim.lr_scheduler.StepLR(self.policy_optim, step_size=6000)
 
         self.dataset = {'s': [], 'p': [], 'a': [], 'r': []}
         self.history_done = []
+
+    def load_checkpoint(self):
+        import os
+        os.makedirs(f'{glob.MODEL_DIR}/opp', exist_ok=True)
+        if os.path.exists(f'{glob.MODEL_DIR}/checkpoint'):
+            checkpoint = torch.load(f'{glob.MODEL_DIR}/checkpoint')
+            self.model.load_state_dict(checkpoint['model'])
+            self.policy_optim.load_state_dict(checkpoint['policy_optim'])
+            self.value_optim.load_state_dict(checkpoint['value_optim'])
+            self.scheduler.load_state_dict(checkpoint['scheduler'])
+            ep_start = checkpoint['epoch']
+            ema_win_rate = checkpoint['win_rate_dict']
+        else:
+            ep_start = 0
+            ema_win_rate = {}
+        return ep_start, ema_win_rate
 
     def save_checkpoint(self, model_dir, ep, win_rate_dict):
         torch.save({
@@ -59,11 +74,11 @@ class Agent:
     @staticmethod
     def choose_action(model, state, return_state_value=False):
         with torch.no_grad():
-            mask = torch.from_numpy(state[:, 1].reshape(-1, 36) != 0).to(device=utils.device, non_blocking=True)
+            mask = torch.from_numpy(state[:, 1].reshape(-1, 36) != 0).to(device=glob.device, non_blocking=True)
             state = utils.zero_center(state)
-            _state = torch.from_numpy(state.astype(np.float32)).to(device=utils.device)  # (n, 2, 6, 6)
+            _state = torch.from_numpy(state.astype(np.float32)).to(device=glob.device)  # (n, 2, 6, 6)
             out = model(_state)
-            policy = model.policy_head(out, mask).cpu()  # (n, 36)
+            policy = f.softmax(model.policy_head(out).masked_fill(mask, -torch.inf), dim=1).cpu()  # (n, 36)
             if return_state_value:
                 return model.value_head(out).squeeze(1).cpu().numpy(), Categorical(policy).sample().numpy()
             else:
@@ -94,20 +109,20 @@ class Agent:
             batch_size=self.minibatch_size,
             shuffle=True,
             drop_last=True,
-            num_workers=8,
+            num_workers=4,
             pin_memory=True,
         )
         for data in self.dataset.values():
             data.clear()
         info = {'value_loss': [], 'pi': [], 'entropy': [], 'pi_ratio': [], 'total_norm': []}
 
-        with tqdm(total=len(batch), ncols=80, leave=False, desc='Updating policy') as tbar:
+        with tqdm(total=len(batch), ncols=80, position=1, leave=False, desc='Updating policy') as tbar:
             for dataset in batch:
                 tbar.update(1)
-                state, old_pi, action, reward, mask = map(lambda data: data.to(device=utils.device, non_blocking=True),
+                state, old_pi, action, reward, mask = map(lambda data: data.to(device=glob.device, non_blocking=True),
                                                           dataset)
                 out = self.model(state)
-                policy = self.policy_head(out, mask)
+                policy = f.softmax(self.policy_head(out).masked_fill(mask, -torch.inf), dim=1)
                 state_value = self.value_head(out.detach()).squeeze(1)
                 adv = reward - state_value.detach()
                 adv = (adv - adv.mean()) / (adv.std() + 1e-5)
@@ -153,10 +168,10 @@ class Agent:
             if player_idx == 1:
                 state[:, [0, 1]] = state[:, [1, 0]]
             if state_value is None and player_idx == 0:
-                state_value, action = Agent.choose_action(self.model, state, return_state_value=True)
+                state_value, action = self.choose_action(self.model, state, return_state_value=True)
                 sel = ~done.copy()
             else:
-                _, action = Agent.choose_action(self.model, state)
+                _, action = self.choose_action(self.model, state)
             state, reward, done = step(state, action, player_idx)
             player_idx = 1 - player_idx
         if state_value is not None:

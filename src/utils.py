@@ -1,13 +1,10 @@
 import numpy as np
-import torch
 from numba import njit, guvectorize, int64
 
 SIZE = np.full((6, 6), 3, dtype=int)
 SIZE[::5, :] = 2
 SIZE[:, ::5] = 2
 SIZE[::5, ::5] = 1
-
-device = torch.device('cpu')
 
 
 def to_mask(indices):
