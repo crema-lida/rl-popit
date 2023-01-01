@@ -129,3 +129,97 @@ class Env:
         import pygame as pg
         pg.display.quit()
         pg.quit()
+
+    def run(self, model_dir, policy_only=True, policy_weight=1.0, max_searches=180):
+        """Run a graphical window to test the model given by model_dir."""
+
+        import onnxruntime
+        import torch
+        import torch.nn.functional as f
+        import time
+        import utils
+
+        self.fps = None
+        self.mode = 'interactive'
+        model = {}
+        for module in ['conv_block', 'policy_head', 'value_head']:
+            model[module] = onnxruntime.InferenceSession(f'{model_dir}/{module}.onnx')
+
+        player_idx = np.random.randint(2)
+        state, reward, done = self.reset()
+
+        while np.any(~done):
+            if player_idx == 1:
+                state[0, [0, 1]] = state[0, [1, 0]]
+                action = self.wait()
+            else:
+                mask = state[:, 1].reshape(-1, 36) != 0
+                out = model['conv_block'].run(None, {
+                    'state': utils.zero_center(state).astype(np.float32)
+                })[0]
+                policy = f.softmax(torch.from_numpy(
+                    model['policy_head'].run(None, {
+                        'conv.out': out
+                    })[0]).masked_fill(torch.from_numpy(mask), -torch.inf), dim=1).numpy()
+                if policy_only or self.num_turns < 30:
+                    self.paint_canvas(policy)
+                    action = np.random.choice(36, size=(1,), p=policy[0])
+                else:
+                    mask = state[0, 1].reshape(-1, 36) != 0
+                    policy[mask] = -np.inf
+                    q = np.zeros_like(policy)  # (1, 36) the action value
+                    n = np.zeros_like(policy)  # (1, 36)
+                    for i in range(max_searches):
+                        score = q + policy_weight * policy / (n + 1)  # (1, 36)
+                        sel = np.argmax(score, axis=1)
+                        q[0, sel] = 0.9 * q[0, sel] + 0.1 * model.rollout(state.copy(), sel, self.num_turns)
+                        n[0, sel] += 1
+                        exp_cmap = np.exp(score)
+                        cmap = exp_cmap / exp_cmap.sum()
+                        self.paint_canvas(cmap)
+                        self.render_text(policy, q, n)
+                        self.render()
+                    action = np.argmax(n, axis=-1)
+
+            state, reward, done = self.step(state.copy(), action, player_idx)
+            self.render()
+            if np.all(done): time.sleep(1)
+            player_idx = 1 - player_idx
+
+    def self_play(self, *model_dir, total_games=100):
+        """
+        Test two models via self-play.
+        Given two directories, show the win rate of the first model.
+        """
+
+        import onnxruntime
+        import torch
+        import torch.nn.functional as f
+        import utils
+
+        model = [{}, {}]
+        for module in ['conv_block', 'policy_head', 'value_head']:
+            for i in range(2):
+                model[i][module] = onnxruntime.InferenceSession(f'{model_dir[i]}/{module}.onnx')
+        wins = 0
+        for count in range(total_games):
+            player_idx = 0 if count % 2 == 0 else 1
+            state, reward, done = self.reset()
+            while np.any(~done):
+                if player_idx == 1:
+                    state[0, [0, 1]] = state[0, [1, 0]]
+                mask = state[:, 1].reshape(-1, 36) != 0
+                out = model[player_idx]['conv_block'].run(None, {
+                    'state': utils.zero_center(state).astype(np.float32)
+                })[0]
+                policy = f.softmax(torch.from_numpy(
+                    model[player_idx]['policy_head'].run(None, {
+                        'conv.out': out
+                    })[0]).masked_fill(torch.from_numpy(mask), -torch.inf), dim=1).numpy()
+                action = np.random.choice(36, size=(1,), p=policy[0])
+
+                state, reward, done = self.step(state.copy(), action, player_idx)
+                player_idx = 1 - player_idx
+            if reward[0] == 1:
+                wins += 1
+            print(f'\r{count + 1}/{total_games} | Model 1 Win Rate: {wins / (count + 1) * 100:.2f}%', end='')
