@@ -26,7 +26,7 @@ The neural network is trained by Proximal Policy Optimization, PPO. I also tweak
 > https://iclr-blog-track.github.io/2022/03/25/ppo-implementation-details/
 
 Some of the implementations work very well for my model: entropy maximization, normalization of advantages, global gradient clipping, etc.
-Each training cycle begins with 128 vectorized environments sampling game states, and then do backpropagation with a minibatch size of 2048. I simply set the reward of each action to 1 if agent wins in one game, else the reward will be -1.
+Each training cycle begins with 128 vectorized environments sampling game states, and then do backpropagation with a minibatch size of 2048. I simply set the reward of each action to 1 if agent wins in one game, elsewise the reward will be -1.
 
 # Training Curve
 The horizontal axis shows the number of epochs and the vertial axis shows the win rate (%). Each curve represents an opponent using the old model. Once the win rate reaches 90%, drop the old model and then save the latest for opponent to use. Training is much tougher after 1000 epochs, and the model finally converges in 15000 epochs.
