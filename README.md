@@ -25,7 +25,7 @@ The neural network is trained by Proximal Policy Optimization, PPO. I also tweak
 > The 37 Implementation Details of Proximal Policy Optimization
 > https://iclr-blog-track.github.io/2022/03/25/ppo-implementation-details/
 
-Some of the implementations works very well for my model: entropy maximization, normalization of advantages, global gradient clipping, etc.
+Some of the implementations work very well for my model: entropy maximization, normalization of advantages, global gradient clipping, etc.
 Each training cycle begins with 128 vectorized environments sampling game states, and then do backpropagation with a minibatch size of 2048. I simply set the reward of each action to 1 if agent wins in one game, else the reward will be -1.
 
 # Training Curve
