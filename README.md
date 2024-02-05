@@ -1,7 +1,7 @@
 # rl-popit
 Welcome to my website to play the game. Give it a try!
 
-http://crema.evalieben.cn:18002/game/
+https://crema.evalieben.cn/game/
 
 <img width="400" alt="屏幕截图 2023-01-03 032403" src="https://user-images.githubusercontent.com/100750226/210271646-0e533114-2949-4059-b341-8876f448d539.png">
 
